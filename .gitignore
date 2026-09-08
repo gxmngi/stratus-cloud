@@ -12,8 +12,9 @@ out/
 workspace/
 **/workspace/
 
-# Fixtures (Local test repos)
-fixtures/
+# Fixtures build artifacts
+fixtures/**/dist/
+fixtures/**/node_modules/
 
 # Environment & Config
 .env

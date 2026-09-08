@@ -1,0 +1,7 @@
+{
+  "name": "demo-app",
+  "version": "1.0.0",
+  "scripts": {
+    "build": "mkdir -p dist && cp index.html dist/ && echo 'Build completed at ' $(date) > dist/build-info.txt"
+  }
+}

@@ -5,6 +5,9 @@ const redisConsumer = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,
 });
+redisConsumer.on('error', (err: Error) => {
+    console.error('[REDIS] Consumer connection error:', err.message);
+});
 
 async function startWorker() {
     console.log('[INFO] Stratus Builder Worker Daemon started');

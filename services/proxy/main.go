@@ -6,11 +6,16 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 )
 
 // DefaultPort พอร์ตมาตรฐานสำหรับ Reverse Proxy
 const DefaultPort = "8000"
+
+// subdomainRegex ตรวจสอบว่า Subdomain มีเฉพาะตัวอักษร ตัวเลข ขีดกลาง (Security Guardrail)
+var subdomainRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
 // ProxyHandler โครงสร้างจัดการ Subdomain Routing
 type ProxyHandler struct {
@@ -19,7 +24,6 @@ type ProxyHandler struct {
 
 // NewProxyHandler กำหนด Base Path ชี้ไปที่ workspace ของ builder
 func NewProxyHandler() *ProxyHandler {
-	// คำนวณ Relative Path จาก services/proxy ไป services/builder/workspace
 	exeDir, err := os.Getwd()
 	if err != nil {
 		log.Fatalf("[FATAL] Unable to determine working directory: %v", err)
@@ -36,7 +40,6 @@ func NewProxyHandler() *ProxyHandler {
 // extractSubdomain แกะชื่อ Deployment ID ออกจาก Host Header
 // เช่น: "dep-261579.localhost:8000" -> "dep-261579"
 func (p *ProxyHandler) extractSubdomain(host string) string {
-	// ตัด Port ออก (ถ้ามี) เช่น "dep-261579.localhost:8000" -> "dep-261579.localhost"
 	hostname := strings.Split(host, ":")[0]
 	parts := strings.Split(hostname, ".")
 
@@ -45,7 +48,13 @@ func (p *ProxyHandler) extractSubdomain(host string) string {
 		return ""
 	}
 
-	return parts[0]
+	sub := parts[0]
+	// ตรวจสอบความปลอดภัยของชื่อ Subdomain ป้องกัน Directory Traversal
+	if !subdomainRegex.MatchString(sub) {
+		return ""
+	}
+
+	return sub
 }
 
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -61,39 +70,53 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			<!DOCTYPE html>
 			<html>
 			<head><title>Stratus Proxy (Go)</title></head>
-			<body style="font-family: system-ui, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem;">
-				<h2>Stratus Cloud Edge Proxy (Go)</h2>
-				<p>Status: ONLINE (Port %s)</p>
-				<p>Engine: Go net/http High-Performance Proxy</p>
-				<p>Usage: Visit <code>http://&lt;deployment-id&gt;.localhost:%s</code></p>
+			<body style="font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2.5rem; line-height: 1.6;">
+				<div style="max-width: 600px; margin: 0 auto; border: 1px solid #222; border-radius: 12px; padding: 2rem; background: #111;">
+					<h2 style="color: #fff; margin-top: 0;">Stratus Cloud Edge Proxy (Go)</h2>
+					<p style="color: #10b981; font-family: monospace; font-size: 0.9rem;">● Status: ONLINE (Port %s)</p>
+					<p style="color: #a1a1aa;">Engine: Go net/http High-Performance Edge Router</p>
+					<hr style="border: none; border-top: 1px solid #222; margin: 1.5rem 0;" />
+					<p style="font-size: 0.85rem; color: #71717a;">Routing Rule: <code>http://&lt;deployment-id&gt;.localhost:%s</code> maps to <code>builder/workspace/&lt;id&gt;/code/dist</code></p>
+				</div>
 			</body>
 			</html>
 		`, DefaultPort, DefaultPort)
 		return
 	}
 
-	// Path ไปยัง Artifact โฟลเดอร์ dist ของ Deployment นั้น
-	deploymentDistDir := filepath.Join(p.workspaceBase, subdomain, "code", "dist")
+	// Path ไปยัง Artifact โฟลเดอร์ dist, build, หรือ out ของ Deployment นั้น
+	candidates := []string{"dist", "build", "out"}
+	var deploymentDistDir string
+
+	for _, candidate := range candidates {
+		candidatePath := filepath.Join(p.workspaceBase, subdomain, "code", candidate)
+		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
+			deploymentDistDir = candidatePath
+			break
+		}
+	}
 
 	// ตรวจสอบว่ามีโฟลเดอร์ Artifact นี้หรือไม่
-	if stat, err := os.Stat(deploymentDistDir); err != nil || !stat.IsDir() {
-		log.Printf("[WARN] Deployment not found: %s (Target: %s)", subdomain, deploymentDistDir)
+	if deploymentDistDir == "" {
+		log.Printf("[WARN] Deployment not found or empty artifacts: %s", subdomain)
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusNotFound)
 		fmt.Fprintf(w, `
 			<!DOCTYPE html>
 			<html>
 			<head><title>404 - Deployment Not Found</title></head>
-			<body style="font-family: system-ui, sans-serif; background: #0a0a0a; color: #ededed; padding: 2rem;">
-				<h2>404 - Deployment Not Found</h2>
-				<p>No active build artifacts found for subdomain: <code>%s</code></p>
+			<body style="font-family: system-ui, -apple-system, sans-serif; background: #0a0a0a; color: #ededed; padding: 2.5rem; line-height: 1.6;">
+				<div style="max-width: 600px; margin: 0 auto; border: 1px solid #222; border-radius: 12px; padding: 2rem; background: #111;">
+					<h2 style="color: #ef4444; margin-top: 0;">404 - Deployment Not Found</h2>
+					<p style="color: #a1a1aa;">No active build artifacts found for subdomain: <code>%s</code></p>
+				</div>
 			</body>
 			</html>
 		`, subdomain)
 		return
 	}
 
-	// จัดการ File Path & SPA Fallback (Single Page Application Fallback)
+	// จัดการ Clean Path
 	cleanURLPath := filepath.Clean(r.URL.Path)
 	if cleanURLPath == "/" || cleanURLPath == "." {
 		cleanURLPath = "index.html"
@@ -101,14 +124,21 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	targetFilePath := filepath.Join(deploymentDistDir, cleanURLPath)
 
-	// ตรวจสอบว่าไฟล์มีอยู่จริงหรือไม่
+	// Security Check: ป้องกัน Path Traversal Attack (ห้าม escape ออกนอก dist)
+	rel, err := filepath.Rel(deploymentDistDir, targetFilePath)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		log.Printf("[SECURITY] Blocked path traversal attempt: %s", r.URL.Path)
+		http.Error(w, "Access Denied: Path Traversal Detected", http.StatusForbidden)
+		return
+	}
+
+	// SPA Fallback: ถ้าเข้า route เช่น /dashboard ให้เสิร์ฟ index.html เพื่อให้ React Router ทำงาน
 	targetInfo, err := os.Stat(targetFilePath)
 	if os.IsNotExist(err) || (err == nil && targetInfo.IsDir()) {
-		// SPA Fallback: ถ้าเข้า route เช่น /dashboard ให้เสิร์ฟ index.html เพื่อให้ React Router ทำงาน
 		targetFilePath = filepath.Join(deploymentDistDir, "index.html")
 	}
 
-	// เสิร์ฟไฟล์ด้วย Go http.ServeFile (จัดการ MIME types และ Caching อัตโนมัติ)
+	// เสิร์ฟไฟล์ด้วย Go http.ServeFile (จัดการ MIME types, Range requests, Caching อัตโนมัติ)
 	http.ServeFile(w, r, targetFilePath)
 }
 
@@ -123,12 +153,17 @@ func main() {
 	log.Printf("[INFO] Stratus Go Reverse Proxy starting on http://localhost:%s", port)
 	log.Printf("[INFO] Watching workspace directory: %s", handler.workspaceBase)
 
+	// Hardened HTTP Server with Production Timeouts (Slowloris Protection)
 	server := &http.Server{
-		Addr:    ":" + port,
-		Handler: handler,
+		Addr:              ":" + port,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 
-	if err := server.ListenAndServe(); err != nil {
+	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("[FATAL] Proxy server crashed: %v", err)
 	}
 }

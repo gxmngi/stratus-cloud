@@ -17,6 +17,9 @@ const redisPublisher = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,
 });
+redisPublisher.on('error', (err) => {
+    console.error('[REDIS] API Publisher connection error:', err.message);
+});
 
 // สร้าง HTTP Server หลัก
 const server = http.createServer(app);
@@ -43,6 +46,9 @@ wss.on('connection', async (ws: WebSocket, req: http.IncomingMessage) => {
     const redisSubscriber = new Redis({
         host: process.env.REDIS_HOST || '127.0.0.1',
         port: Number(process.env.REDIS_PORT) || 6379,
+    });
+    redisSubscriber.on('error', (err) => {
+        console.error(`[REDIS] API Subscriber error on ${deploymentId}:`, err.message);
     });
 
     const logChannel = `logs:${deploymentId}`;

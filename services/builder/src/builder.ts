@@ -11,6 +11,9 @@ const redisPublisher = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,
 });
+redisPublisher.on('error', (err: Error) => {
+    console.error('[REDIS] Publisher connection error:', err.message);
+});
 
 export interface BuildOptions {
     gitUrl: string;
@@ -77,22 +80,73 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     }
     fs.mkdirSync(codeDir, { recursive: true });
 
-    // Step 1: Clone Repository
-    await emitLog(deploymentId, `[INFO] [${deploymentId}] Cloning repository: ${gitUrl}`);
-    try {
-        const git = simpleGit();
-        await git.clone(gitUrl, codeDir, ['--depth', '1']);
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Repository cloned successfully`);
-    } catch (err: unknown) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
-        await emitLog(deploymentId, `[STATUS] FAILED`);
-        return {
-            success: false,
-            exitCode: 1,
-            artifactPath: null,
-            error: `Git clone failed: ${errorMessage}`,
-        };
+    // Step 1: Clone or Copy Repository
+    let targetRepoUrl = gitUrl;
+    let isLocalDir = false;
+
+    if (!gitUrl.startsWith('http://') && !gitUrl.startsWith('https://') && !gitUrl.startsWith('git@')) {
+        if (!path.isAbsolute(gitUrl)) {
+            // คำนวณ path สัมพัทธ์จาก root ของ stratus-cloud
+            targetRepoUrl = path.resolve(__dirname, '../../..', gitUrl);
+        }
+        if (fs.existsSync(targetRepoUrl)) {
+            isLocalDir = true;
+        }
+    }
+
+    if (isLocalDir) {
+        const hasGit = fs.existsSync(path.join(targetRepoUrl, '.git'));
+        if (hasGit) {
+            await emitLog(deploymentId, `[INFO] [${deploymentId}] Cloning local git repository: ${targetRepoUrl}`);
+            try {
+                const git = simpleGit();
+                await git.clone(targetRepoUrl, codeDir, ['--depth', '1']);
+                await emitLog(deploymentId, `[INFO] [${deploymentId}] Repository cloned successfully`);
+            } catch (err: unknown) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
+                await emitLog(deploymentId, `[STATUS] FAILED`);
+                return {
+                    success: false,
+                    exitCode: 1,
+                    artifactPath: null,
+                    error: `Git clone failed: ${errorMessage}`,
+                };
+            }
+        } else {
+            await emitLog(deploymentId, `[INFO] [${deploymentId}] Loading local fixture directory: ${targetRepoUrl}`);
+            try {
+                fs.cpSync(targetRepoUrl, codeDir, { recursive: true });
+                await emitLog(deploymentId, `[INFO] [${deploymentId}] Local fixture files initialized successfully`);
+            } catch (err: unknown) {
+                const errorMessage = err instanceof Error ? err.message : String(err);
+                await emitLog(deploymentId, `[ERROR] [${deploymentId}] Failed to load local fixture: ${errorMessage}`);
+                await emitLog(deploymentId, `[STATUS] FAILED`);
+                return {
+                    success: false,
+                    exitCode: 1,
+                    artifactPath: null,
+                    error: `Directory copy failed: ${errorMessage}`,
+                };
+            }
+        }
+    } else {
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Cloning remote repository: ${targetRepoUrl}`);
+        try {
+            const git = simpleGit();
+            await git.clone(targetRepoUrl, codeDir, ['--depth', '1']);
+            await emitLog(deploymentId, `[INFO] [${deploymentId}] Repository cloned successfully`);
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : String(err);
+            await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
+            await emitLog(deploymentId, `[STATUS] FAILED`);
+            return {
+                success: false,
+                exitCode: 1,
+                artifactPath: null,
+                error: `Git clone failed: ${errorMessage}`,
+            };
+        }
     }
 
     // Step 2: Auto-detect Build Command
@@ -137,7 +191,9 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
 
     await emitLog(deploymentId, `[LOGS] [${deploymentId}] --- CONTAINER EXECUTION START ---`);
     stream.on('data', (chunk: Buffer) => {
-        emitLog(deploymentId, chunk.toString());
+        emitLog(deploymentId, chunk.toString()).catch((err) => {
+            console.error('[LOGS] Stream emit error:', err);
+        });
     });
 
     // Step 5: Execute & Await Completion

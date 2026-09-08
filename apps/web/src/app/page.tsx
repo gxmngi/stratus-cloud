@@ -21,7 +21,7 @@ interface DeploymentState {
 }
 
 export default function Home() {
-  const [gitUrl, setGitUrl] = useState("C:/Users/VICTUS 16/stratus-cloud/fixtures/demo-app");
+  const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployment, setDeployment] = useState<DeploymentState | null>(null);
 
@@ -134,10 +134,10 @@ export default function Home() {
               <span>Quick Select:</span>
               <button
                 type="button"
-                onClick={() => setGitUrl("C:/Users/VICTUS 16/stratus-cloud/fixtures/demo-app")}
+                onClick={() => setGitUrl("fixtures/demo-app")}
                 className="text-zinc-400 hover:text-white underline decoration-zinc-700 underline-offset-2"
               >
-                Local Demo App
+                Local Demo App (fixtures/demo-app)
               </button>
             </div>
           </form>
