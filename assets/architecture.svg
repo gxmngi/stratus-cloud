@@ -1,0 +1,207 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 480" width="100%" height="100%">
+  <defs>
+    <!-- Background Gradient -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0a0e17" />
+      <stop offset="100%" stop-color="#0f172a" />
+    </linearGradient>
+
+    <!-- Card Gradients -->
+    <linearGradient id="cardGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1e293b" stop-opacity="0.85" />
+      <stop offset="100%" stop-color="#0f172a" stop-opacity="0.95" />
+    </linearGradient>
+
+    <!-- Arrow Markers -->
+    <marker id="arrowBlue" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#38bdf8" />
+    </marker>
+    <marker id="arrowIndigo" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#818cf8" />
+    </marker>
+    <marker id="arrowRose" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#f43f5e" />
+    </marker>
+    <marker id="arrowAmber" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#fbbf24" />
+    </marker>
+    <marker id="arrowEmerald" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#10b981" />
+    </marker>
+    <marker id="arrowPurple" markerWidth="8" markerHeight="8" refX="6" refY="4" orient="auto">
+      <path d="M1,1 L7,4 L1,7 Z" fill="#a855f7" />
+    </marker>
+
+    <!-- Drop Shadows -->
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="6" flood-color="#000" flood-opacity="0.5" />
+    </filter>
+  </defs>
+
+  <style>
+    .title-main { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 13px; font-weight: 700; fill: #94a3b8; letter-spacing: 1.5px; }
+    .badge-text { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 600; fill: #38bdf8; }
+    .col-title { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 11px; font-weight: 600; fill: #64748b; letter-spacing: 1px; }
+    
+    .card-title { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 14px; font-weight: 600; fill: #f8fafc; }
+    .card-sub { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; font-size: 12px; fill: #94a3b8; }
+    .card-meta { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10.5px; fill: #cbd5e1; }
+    
+    .flow-tag { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 10px; font-weight: 600; fill: #f8fafc; }
+  </style>
+
+  <!-- Base Canvas -->
+  <rect width="960" height="480" rx="14" fill="url(#bgGrad)" stroke="#1e293b" stroke-width="1.5" />
+
+  <!-- Top Header -->
+  <g transform="translate(40, 36)">
+    <circle cx="6" cy="6" r="4" fill="#38bdf8" />
+    <text x="18" y="10" class="title-main">STRATUS CLOUD ARCHITECTURE</text>
+    
+    <!-- Status Pill -->
+    <rect x="690" y="-8" width="190" height="26" rx="13" fill="#0f172a" stroke="#334155" stroke-width="1" />
+    <circle cx="705" cy="5" r="3.5" fill="#10b981" />
+    <text x="716" y="9" class="badge-text">EVENT-DRIVEN PAAS</text>
+  </g>
+
+  <!-- ==================== COLUMN HEADERS ==================== -->
+  <text x="40" y="78" class="col-title">01 / CONTROL PLANE &amp; UI</text>
+  <text x="360" y="78" class="col-title">02 / DISPATCH &amp; ISOLATION</text>
+  <text x="680" y="78" class="col-title">03 / EDGE NETWORK &amp; PROXY</text>
+
+  <!-- ==================== COLUMN 1 (CLIENT & CONTROL) ==================== -->
+  <!-- Card 1A: Next.js Dashboard -->
+  <g transform="translate(40, 95)" filter="url(#shadow)">
+    <rect width="250" height="135" rx="10" fill="url(#cardGrad)" stroke="#38bdf8" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#38bdf8" />
+    <text x="34" y="28" class="card-title">apps/web (Dashboard)</text>
+    <text x="20" y="52" class="card-sub">Next.js 15 + React 19 UI</text>
+    <text x="20" y="72" class="card-sub">Interactive xterm.js Terminal</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="76" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">Port 3000</text>
+    
+    <rect x="104" y="94" width="94" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="112" y="109" class="card-meta">WebSocket</text>
+  </g>
+
+  <!-- Card 1B: API Gateway -->
+  <g transform="translate(40, 285)" filter="url(#shadow)">
+    <rect width="250" height="135" rx="10" fill="url(#cardGrad)" stroke="#818cf8" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#818cf8" />
+    <text x="34" y="28" class="card-title">services/api (Gateway)</text>
+    <text x="20" y="52" class="card-sub">Express REST + WS Server</text>
+    <text x="20" y="72" class="card-sub">Deployment Dispatcher</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="76" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">Port 4000</text>
+    
+    <rect x="104" y="94" width="88" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="112" y="109" class="card-meta">Node/TS</text>
+  </g>
+
+  <!-- ==================== COLUMN 2 (MESSAGE BUS & BUILDER) ==================== -->
+  <!-- Card 2A: Redis -->
+  <g transform="translate(360, 95)" filter="url(#shadow)">
+    <rect width="250" height="135" rx="10" fill="url(#cardGrad)" stroke="#f43f5e" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#f43f5e" />
+    <text x="34" y="28" class="card-title">Redis Message Bus</text>
+    <text x="20" y="52" class="card-sub">Task Queue (queue:build)</text>
+    <text x="20" y="72" class="card-sub">Pub/Sub (logs:deploymentId)</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="76" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">Port 6379</text>
+    
+    <rect x="104" y="94" width="112" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="112" y="109" class="card-meta">In-Memory</text>
+  </g>
+
+  <!-- Card 2B: Docker Builder Daemon -->
+  <g transform="translate(360, 285)" filter="url(#shadow)">
+    <rect width="250" height="135" rx="10" fill="url(#cardGrad)" stroke="#fbbf24" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#fbbf24" />
+    <text x="34" y="28" class="card-title">services/builder</text>
+    <text x="20" y="52" class="card-sub">Docker Sandbox (node:20-alpine)</text>
+    <text x="20" y="72" class="card-sub">pnpm / yarn / bun / npm auto-detect</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="88" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">1GB RAM</text>
+    
+    <rect x="116" y="94" width="88" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="124" y="109" class="card-meta">1.0 CPU</text>
+  </g>
+
+  <!-- ==================== COLUMN 3 (ARTIFACTS & PROXY) ==================== -->
+  <!-- Card 3A: Artifact Cache -->
+  <g transform="translate(680, 95)" filter="url(#shadow)">
+    <rect width="240" height="135" rx="10" fill="url(#cardGrad)" stroke="#a855f7" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#a855f7" />
+    <text x="34" y="28" class="card-title">Build Artifacts</text>
+    <text x="20" y="52" class="card-sub">workspace/&lt;id&gt;/code/dist</text>
+    <text x="20" y="72" class="card-sub">Auto-detects dist / build / out</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="94" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">Static Storage</text>
+    
+    <rect x="122" y="94" width="80" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="130" y="109" class="card-meta">Isolated</text>
+  </g>
+
+  <!-- Card 3B: Go Reverse Proxy -->
+  <g transform="translate(680, 285)" filter="url(#shadow)">
+    <rect width="240" height="135" rx="10" fill="url(#cardGrad)" stroke="#10b981" stroke-width="1.2" stroke-opacity="0.7" />
+    <circle cx="20" cy="24" r="5" fill="#10b981" />
+    <text x="34" y="28" class="card-title">services/proxy (Go)</text>
+    <text x="20" y="52" class="card-sub">Subdomain: *.localhost:8000</text>
+    <text x="20" y="72" class="card-sub">Path Traversal Shield &amp; SPA</text>
+    
+    <!-- Tags -->
+    <rect x="20" y="94" width="76" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="28" y="109" class="card-meta">Port 8000</text>
+    
+    <rect x="104" y="94" width="88" height="22" rx="4" fill="#0f172a" stroke="#334155" />
+    <text x="112" y="109" class="card-meta">net/http</text>
+  </g>
+
+  <!-- ==================== CLEAN PIPELINE FLOW (ARROWS) ==================== -->
+
+  <!-- Flow 1: UI -> API (POST /deploy) -->
+  <path d="M165,230 L165,283" stroke="#818cf8" stroke-width="1.6" marker-end="url(#arrowIndigo)" />
+  <rect x="100" y="247" width="130" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="106" y="261" class="flow-tag">1. POST /api/deploy</text>
+
+  <!-- Flow 2: API -> Redis (LPUSH) -->
+  <path d="M290,340 L325,340 L325,160 L358,160" fill="none" stroke="#f43f5e" stroke-width="1.6" marker-end="url(#arrowRose)" />
+  <rect x="290" y="200" width="100" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="296" y="214" class="flow-tag">2. LPUSH queue</text>
+
+  <!-- Flow 3: Redis -> Builder (BLPOP) -->
+  <path d="M440,230 L440,283" stroke="#fbbf24" stroke-width="1.6" marker-end="url(#arrowAmber)" />
+  <rect x="390" y="247" width="100" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="396" y="261" class="flow-tag">3. BLPOP task</text>
+
+  <!-- Flow 4: Builder -> Redis (Pub/Sub logs) -->
+  <path d="M530,285 L530,232" stroke="#f43f5e" stroke-width="1.6" stroke-dasharray="4,4" marker-end="url(#arrowRose)" />
+  <rect x="480" y="247" width="102" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="486" y="261" class="flow-tag">4. PUBLISH logs</text>
+
+  <!-- Flow 5: Redis -> Web UI (WS Stream) -->
+  <path d="M360,180 L292,180" stroke="#38bdf8" stroke-width="1.6" stroke-dasharray="4,4" marker-end="url(#arrowBlue)" />
+  <rect x="300" y="160" width="80" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="306" y="174" class="flow-tag">5. WS Stream</text>
+
+  <!-- Flow 6: Builder -> Artifacts (Compilation output) -->
+  <path d="M610,340 L645,340 L645,160 L678,160" fill="none" stroke="#a855f7" stroke-width="1.6" marker-end="url(#arrowPurple)" />
+  <rect x="610" y="200" width="94" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="616" y="214" class="flow-tag">6. Output dist/</text>
+
+  <!-- Flow 7: Artifacts -> Go Proxy (Serving) -->
+  <path d="M800,230 L800,283" stroke="#10b981" stroke-width="1.6" marker-end="url(#arrowEmerald)" />
+  <rect x="745" y="247" width="110" height="20" rx="4" fill="#0b1329" stroke="#334155" />
+  <text x="751" y="261" class="flow-tag">7. Serves Artifact</text>
+</svg>

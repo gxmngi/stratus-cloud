@@ -1,4 +1,4 @@
-﻿# Stratus Cloud
+# Stratus Cloud
 
 <p align="left">
   <img src="https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js" alt="Next.js 15" />
@@ -29,39 +29,60 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 
 ## Distributed System Architecture
 
+<p align="center">
+  <img src="assets/architecture.svg" alt="Stratus Cloud Architecture" width="100%" />
+</p>
+
+<details>
+<summary><b>View Architecture Execution Pipeline Breakdown</b></summary>
+
+### Sequential Execution Matrix
+
+| Stage | Source → Target | Action | Transport / Protocol |
+| :--- | :--- | :--- | :--- |
+| **1. Ingest** | `apps/web` → `services/api` | Dispatches deployment trigger | HTTP POST (`/api/deploy`) |
+| **2. Enqueue** | `services/api` → Redis | Pushes task to background queue | Redis `LPUSH queue:build` |
+| **3. Dequeue** | Redis → `services/builder` | Worker pulls next available task | Redis `BLPOP queue:build` |
+| **4. Sandbox** | `services/builder` → Docker | Provisions ephemeral container | Docker Engine API (`node:20-alpine`) |
+| **5. Stream** | Docker → Redis Pub/Sub | Publishes real-time build logs | Redis `PUBLISH logs:<id>` |
+| **6. Relay** | Redis Pub/Sub → `apps/web` | Forwards log stream to UI | WebSockets (`ws://localhost:4000`) |
+| **7. Export** | `services/builder` → Storage | Verifies output directory (`dist/`) | Local Workspace Cache |
+| **8. Serve** | Client → `services/proxy` | Routes requests by subdomain | Go Reverse Proxy (`:8000`) |
+
+### Topology Flowchart
+
 ```mermaid
-flowchart TD
-    subgraph Client["Developer / Browser"]
-        Dev["User Browser\n(localhost:3000)"]
+flowchart LR
+    subgraph UI ["01. Control Plane & UI"]
+        Dev["User Browser<br/>(localhost:3000)"]
+        Dash["Next.js 15 Dashboard<br/>(xterm.js Terminal)"]
+        API["API Gateway<br/>(Port 4000)"]
+        Dev --> Dash
+        Dash -->|"1. POST /deploy"| API
     end
 
-    subgraph ControlPlane["Control Plane & UI"]
-        API["services/api (REST & WS Gateway)\n• Port 4000\n• Enqueues Build Tasks"]
-        Dash["apps/web (Next.js 15 Dashboard)\n• Port 3000\n• xterm.js Terminal Emulator"]
+    subgraph Broker ["02. Message Bus & Isolation"]
+        RedisQueue[("Redis Queue<br/>queue:build")]
+        Docker["Docker Sandbox<br/>(node:20-alpine)"]
+        RedisPubSub[("Redis Pub/Sub<br/>logs:id")]
+        RedisQueue -->|"3. Pull Task"| Docker
+        Docker -.->|"4. Stream Logs"| RedisPubSub
     end
 
-    subgraph MessageBus["Redis Message Bus"]
-        Queue[("Redis Queue\nqueue:build")]
-        PubSub[("Redis Pub/Sub\nlogs:deploymentId")]
+    subgraph Edge ["03. Edge Network & Storage"]
+        Dist[("Build Artifacts<br/>dist/ directory")]
+        GoProxy["Go Reverse Proxy<br/>(Port 8000)"]
+        App["Live Application<br/>(*.localhost:8000)"]
+        Dist --> GoProxy
+        GoProxy --> App
     end
 
-    subgraph ExecutionEngine["Execution Engine"]
-        Builder["services/builder (Docker Sandbox Daemon)\n• Ephemeral node:20-alpine\n• Resource Limits: 1GB RAM / 1.0 CPU\n• Auto-detects pnpm/yarn/bun/npm"]
-    end
-
-    subgraph EdgeNetwork["Edge Network"]
-        Proxy["services/proxy (Go Edge Reverse Proxy)\n• Port 8000\n• Subdomain: id.localhost:8000\n• Path Traversal Guard\n• SPA Fallback Router"]
-    end
-
-    Dev -->|"1. POST /api/deploy"| API
-    API -->|"2. Enqueue Job (LPUSH)"| Queue
-    Queue -->|"3. Pull Job (BLPOP)"| Builder
-    Builder -->|"4. Stream stdout/stderr (PUBLISH)"| PubSub
-    PubSub -->|"5. Forward via WebSocket"| API
-    API -->|"6. Stream Logs to Terminal"| Dash
-    Builder -->|"7. Output Artifacts (dist/)"| Proxy
-    Dev -.->|"8. Visit http://id.localhost:8000"| Proxy
+    API -->|"2. Enqueue"| RedisQueue
+    RedisPubSub -.->|"5. WebSocket Stream"| Dash
+    Docker -->|"6. Output Dist"| Dist
 ```
+
+</details>
 
 ---
 
