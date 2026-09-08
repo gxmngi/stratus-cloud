@@ -7,6 +7,7 @@ dist/
 build/
 out/
 .next/
+*.exe
 
 # Stratus Ephemeral Workspaces
 workspace/

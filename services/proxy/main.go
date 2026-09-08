@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -41,10 +42,14 @@ func NewProxyHandler() *ProxyHandler {
 // เช่น: "dep-261579.localhost:8000" -> "dep-261579"
 func (p *ProxyHandler) extractSubdomain(host string) string {
 	hostname := strings.Split(host, ":")[0]
-	parts := strings.Split(hostname, ".")
 
-	// ถ้าไม่มี subdomain (เช่น localhost หรือ 127.0.0.1)
-	if len(parts) < 2 || parts[0] == "localhost" {
+	// ถ้าไม่มี subdomain หรือเป็น localhost / IP Address
+	if hostname == "localhost" || net.ParseIP(hostname) != nil {
+		return ""
+	}
+
+	parts := strings.Split(hostname, ".")
+	if len(parts) < 2 {
 		return ""
 	}
 
@@ -122,15 +127,22 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Security Check: ป้องกัน Path Traversal Attack (บล็อก .. ใน URL ทันที)
+	if strings.Contains(r.URL.Path, "..") {
+		log.Printf("[SECURITY] Blocked path traversal attempt: %s", r.URL.Path)
+		http.Error(w, "Access Denied: Path Traversal Detected", http.StatusForbidden)
+		return
+	}
+
 	// จัดการ Clean Path
-	cleanURLPath := filepath.Clean(r.URL.Path)
-	if cleanURLPath == "/" || cleanURLPath == "." {
+	cleanURLPath := strings.TrimPrefix(filepath.Clean(r.URL.Path), string(filepath.Separator))
+	if cleanURLPath == "" || cleanURLPath == "." {
 		cleanURLPath = "index.html"
 	}
 
 	targetFilePath := filepath.Join(deploymentDistDir, cleanURLPath)
 
-	// Security Check: ป้องกัน Path Traversal Attack (ห้าม escape ออกนอก dist)
+	// Secondary Defense: ตรวจสอบ Relative Path ห้ามหลุดออกนอก Root Dist Directory
 	rel, err := filepath.Rel(deploymentDistDir, targetFilePath)
 	if err != nil || strings.HasPrefix(rel, "..") {
 		log.Printf("[SECURITY] Blocked path traversal attempt: %s", r.URL.Path)
