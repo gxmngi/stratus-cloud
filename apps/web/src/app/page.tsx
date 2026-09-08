@@ -8,7 +8,11 @@ import {
   CheckCircle2, 
   AlertCircle, 
   Loader2, 
-  Layers 
+  Layers,
+  ChevronDown,
+  ChevronRight,
+  Plus,
+  Trash2
 } from "lucide-react";
 
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
@@ -24,6 +28,26 @@ export default function Home() {
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
   const [deployment, setDeployment] = useState<DeploymentState | null>(null);
+  const [showEnv, setShowEnv] = useState(false);
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([
+    { key: "", value: "" },
+  ]);
+
+  const handleAddEnv = () => {
+    setEnvVars((prev) => [...prev, { key: "", value: "" }]);
+  };
+
+  const handleRemoveEnv = (index: number) => {
+    setEnvVars((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleUpdateEnv = (index: number, field: "key" | "value", val: string) => {
+    setEnvVars((prev) => {
+      const next = [...prev];
+      next[index] = { ...next[index], [field]: val };
+      return next;
+    });
+  };
 
   const handleDeploy = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,11 +56,23 @@ export default function Home() {
     setIsDeploying(true);
     setDeployment(null);
 
+    // Format custom env variables dictionary
+    const envPayload: Record<string, string> = {};
+    for (const item of envVars) {
+      const trimmedKey = item.key.trim();
+      if (trimmedKey) {
+        envPayload[trimmedKey] = item.value;
+      }
+    }
+
     try {
       const response = await fetch("http://localhost:4000/api/deploy", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ gitUrl }),
+        body: JSON.stringify({ 
+          gitUrl,
+          env: Object.keys(envPayload).length > 0 ? envPayload : undefined,
+        }),
       });
 
       if (!response.ok) {
@@ -135,10 +171,74 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setGitUrl("fixtures/demo-app")}
-                className="text-zinc-400 hover:text-white underline decoration-zinc-700 underline-offset-2"
+                className="text-zinc-400 hover:text-white underline decoration-zinc-700 underline-offset-2 cursor-pointer"
               >
                 Local Demo App (fixtures/demo-app)
               </button>
+            </div>
+
+            {/* Collapsible Environment Variables Section */}
+            <div className="pt-3 border-t border-zinc-800/80">
+              <button
+                type="button"
+                onClick={() => setShowEnv(!showEnv)}
+                className="inline-flex items-center gap-2 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
+              >
+                {showEnv ? (
+                  <ChevronDown className="w-3.5 h-3.5" />
+                ) : (
+                  <ChevronRight className="w-3.5 h-3.5" />
+                )}
+                <span>Environment Variables (.env)</span>
+                {envVars.filter((v) => v.key.trim()).length > 0 && (
+                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 text-emerald-400 border border-zinc-700 font-mono">
+                    {envVars.filter((v) => v.key.trim()).length} configured
+                  </span>
+                )}
+              </button>
+
+              {showEnv && (
+                <div className="mt-3 space-y-2.5 pl-3 border-l border-zinc-800">
+                  <p className="text-[11px] text-zinc-500 font-mono">
+                    Injected into Docker build sandbox during compilation.
+                  </p>
+                  {envVars.map((item, idx) => (
+                    <div key={idx} className="flex gap-2 items-center">
+                      <input
+                        type="text"
+                        placeholder="KEY (e.g. VITE_API_URL)"
+                        value={item.key}
+                        onChange={(e) => handleUpdateEnv(idx, "key", e.target.value)}
+                        className="w-1/3 bg-black border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:outline-none focus:border-zinc-500 uppercase"
+                      />
+                      <input
+                        type="text"
+                        placeholder="VALUE"
+                        value={item.value}
+                        onChange={(e) => handleUpdateEnv(idx, "value", e.target.value)}
+                        className="flex-1 bg-black border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:outline-none focus:border-zinc-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveEnv(idx)}
+                        disabled={envVars.length === 1 && !item.key && !item.value}
+                        className="text-zinc-500 hover:text-red-400 p-1.5 rounded transition-colors disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
+                        title="Remove variable"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={handleAddEnv}
+                    className="inline-flex items-center gap-1.5 text-xs font-mono text-zinc-400 hover:text-white pt-1 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Add Variable</span>
+                  </button>
+                </div>
+              )}
             </div>
           </form>
         </div>

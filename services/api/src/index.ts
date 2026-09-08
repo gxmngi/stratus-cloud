@@ -83,14 +83,13 @@ app.get('/api/health', (req: Request, res: Response) => {
 
 // Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว
 app.post('/api/deploy', async (req: Request, res: Response) => {
-    const { gitUrl, buildCommand } = req.body;
+    const { gitUrl, buildCommand, env } = req.body;
 
     if (!gitUrl) {
         res.status(400).json({ error: 'Field "gitUrl" is required' });
         return;
     }
 
-    // สุ่ม Deployment ID (เช่น dep-481920)
     const deploymentId = `dep-${Date.now().toString().slice(-6)}`;
     const liveUrl = `http://${deploymentId}.localhost:8000`;
 
@@ -100,6 +99,7 @@ app.post('/api/deploy', async (req: Request, res: Response) => {
         deploymentId,
         gitUrl,
         buildCommand,
+        env: typeof env === 'object' && env !== null ? env : {},
     };
 
     // ส่ง Job เข้า Redis Queue: "queue:build"

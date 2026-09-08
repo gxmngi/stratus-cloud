@@ -20,6 +20,7 @@ export interface BuildOptions {
     deploymentId: string;
     buildCommand?: string;
     outputDir?: string;
+    env?: Record<string, string>;
 }
 
 export interface BuildResult {
@@ -156,13 +157,26 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = codeDir.replace(/\\/g, '/');
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
-
+    // Format custom environment variables for Docker container
+    const formattedEnv: string[] = [];
+    if (options.env && typeof options.env === 'object') {
+        for (const [key, value] of Object.entries(options.env)) {
+            // Security: Sanitize key to allow only valid environment variable names
+            if (/^[A-Za-z0-9_]+$/.test(key)) {
+                formattedEnv.push(`${key}=${value}`);
+            }
+        }
+    }
+    if (formattedEnv.length > 0) {
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Injected ${formattedEnv.length} custom environment variable(s)`);
+    }
     let container: Docker.Container;
     try {
         container = await docker.createContainer({
             Image: 'node:20-alpine',
             Cmd: ['sh', '-c', effectiveBuildCommand],
             WorkingDir: '/app',
+            Env: formattedEnv, // <-- ฉีด Environment Variables เข้าไปใน Container
             HostConfig: {
                 Binds: [`${hostMountPath}:/app`],
                 Memory: 1024 * 1024 * 1024, // 1GB memory limit
