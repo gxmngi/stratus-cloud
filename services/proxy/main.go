@@ -60,7 +60,13 @@ func (p *ProxyHandler) extractSubdomain(host string) string {
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	subdomain := p.extractSubdomain(r.Host)
 
-	log.Printf("[REQUEST] %s %s | Host: %s | Subdomain: %s", r.Method, r.URL.Path, r.Host, subdomain)
+	// Health check endpoint probe (Kubernetes / Liveness readiness probe)
+	if r.URL.Path == "/healthz" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintf(w, `{"status":"ok","service":"stratus-proxy","timestamp":%d}`+"\n", time.Now().Unix())
+		return
+	}
 
 	// กรณีเข้าผ่าน http://localhost:8000 ตรงๆ (Landing Page ของ Proxy)
 	if subdomain == "" {
