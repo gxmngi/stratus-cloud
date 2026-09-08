@@ -2,8 +2,15 @@ import Docker from 'dockerode';
 import simpleGit from 'simple-git';
 import path from 'path';
 import fs from 'fs';
+import Redis from 'ioredis';
 
 const docker = new Docker();
+
+// Redis Client สำหรับ Publish Logs และส่ง Signal
+const redisPublisher = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT) || 6379,
+});
 
 export interface BuildOptions {
     gitUrl: string;
@@ -39,6 +46,18 @@ function resolveBuildCommand(codeDir: string, customCommand?: string): string {
     return 'npm install && npm run build';
 }
 
+/**
+ * ฟังก์ชันส่ง Log ทั้งออกทาง Local Console และยิงเข้า Redis Pub/Sub
+ */
+async function emitLog(deploymentId: string, message: string) {
+    // พิมพ์ออก Console ของ Builder เอง
+    process.stdout.write(message.endsWith('\n') ? message : message + '\n');
+
+    // ยิงเข้า Redis Channel เฉพาะของ Deployment นี้ เพื่อให้ WebSocket หยิบไปส่งหน้าเว็บ
+    const channel = `logs:${deploymentId}`;
+    await redisPublisher.publish(channel, message);
+}
+
 export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     const { 
         gitUrl, 
@@ -50,8 +69,8 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     const workspaceDir = path.resolve(__dirname, `../workspace/${deploymentId}`);
     const codeDir = path.join(workspaceDir, 'code');
 
-    console.log(`[INFO] [${deploymentId}] Initializing build environment`);
-    console.log(`[INFO] [${deploymentId}] Workspace directory: ${workspaceDir}`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Initializing build environment`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Workspace directory: ${workspaceDir}`);
 
     if (fs.existsSync(workspaceDir)) {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
@@ -59,14 +78,15 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     fs.mkdirSync(codeDir, { recursive: true });
 
     // Step 1: Clone Repository
-    console.log(`[INFO] [${deploymentId}] Cloning repository: ${gitUrl}`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Cloning repository: ${gitUrl}`);
     try {
         const git = simpleGit();
         await git.clone(gitUrl, codeDir, ['--depth', '1']);
-        console.log(`[INFO] [${deploymentId}] Repository cloned successfully`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Repository cloned successfully`);
     } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error(`[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
+        await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
+        await emitLog(deploymentId, `[STATUS] FAILED`);
         return {
             success: false,
             exitCode: 1,
@@ -77,11 +97,11 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
 
     // Step 2: Auto-detect Build Command
     const effectiveBuildCommand = resolveBuildCommand(codeDir, customBuildCommand);
-    console.log(`[INFO] [${deploymentId}] Resolved build command: "${effectiveBuildCommand}"`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Resolved build command: "${effectiveBuildCommand}"`);
 
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = codeDir.replace(/\\/g, '/');
-    console.log(`[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
 
     let container: Docker.Container;
     try {
@@ -98,7 +118,8 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
         });
     } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
-        console.error(`[ERROR] [${deploymentId}] Container creation failed: ${errorMessage}`);
+        await emitLog(deploymentId, `[ERROR] [${deploymentId}] Container creation failed: ${errorMessage}`);
+        await emitLog(deploymentId, `[STATUS] FAILED`);
         return {
             success: false,
             exitCode: 1,
@@ -107,24 +128,24 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
         };
     }
 
-    // Step 4: Stream Logs
+    // Step 4: Stream Logs From Container
     const stream = await container.attach({
         stream: true,
         stdout: true,
         stderr: true,
     });
 
-    console.log(`[LOGS] [${deploymentId}] --- CONTAINER EXECUTION START ---`);
+    await emitLog(deploymentId, `[LOGS] [${deploymentId}] --- CONTAINER EXECUTION START ---`);
     stream.on('data', (chunk: Buffer) => {
-        process.stdout.write(chunk.toString());
+        emitLog(deploymentId, chunk.toString());
     });
 
     // Step 5: Execute & Await Completion
     await container.start();
     const result = await container.wait();
 
-    console.log(`[LOGS] [${deploymentId}] --- CONTAINER EXECUTION END ---`);
-    console.log(`[INFO] [${deploymentId}] Container process exited with code: ${result.StatusCode}`);
+    await emitLog(deploymentId, `[LOGS] [${deploymentId}] --- CONTAINER EXECUTION END ---`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Container process exited with code: ${result.StatusCode}`);
 
     // Step 6: Cleanup Container
     await container.remove();
@@ -143,9 +164,10 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
 
     if (result.StatusCode === 0 && detectedDir) {
         const generatedFiles = fs.readdirSync(detectedDir);
-        console.log(`[INFO] [${deploymentId}] Build succeeded`);
-        console.log(`[INFO] [${deploymentId}] Artifact location: ${detectedDir}`);
-        console.log(`[INFO] [${deploymentId}] Artifact contents: [${generatedFiles.slice(0, 8).join(', ')}${generatedFiles.length > 8 ? ', ...' : ''}]`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Build succeeded`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact location: ${detectedDir}`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact contents: [${generatedFiles.slice(0, 8).join(', ')}]`);
+        await emitLog(deploymentId, `[STATUS] READY`);
 
         return {
             success: true,
@@ -154,7 +176,8 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
         };
     }
 
-    console.error(`[ERROR] [${deploymentId}] Build failed or no build artifacts detected`);
+    await emitLog(deploymentId, `[ERROR] [${deploymentId}] Build failed or no build artifacts detected`);
+    await emitLog(deploymentId, `[STATUS] FAILED`);
     return {
         success: false,
         exitCode: result.StatusCode,
