@@ -22,6 +22,7 @@ services:
       PORT: "4000"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
     ports:
       - "4000:4000"
     depends_on:
@@ -41,12 +42,15 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       WORKSPACE_DIR: /workspace
+      GITHUB_TOKEN: ${GITHUB_TOKEN:-}
       # path เดียวกันบน Host ที่ Docker Engine ใช้ Bind Mount ให้ Sandbox
       HOST_WORKSPACE_PATH: ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}
     volumes:
       # ให้ Builder สั่ง Docker Engine ของ Host ได้ (Sandbox ทำงานเป็น Sibling Container)
       - /var/run/docker.sock:/var/run/docker.sock
       - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace
+      # Local fixtures (เช่น fixtures/demo-app). builder resolve path สัมพัทธ์จาก root ของโปรเจกต์ (/)
+      - ./fixtures:/fixtures:ro
     depends_on:
       redis:
         condition: service_healthy

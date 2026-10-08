@@ -2,15 +2,15 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-ENV NODE_ENV=production
-
+# ไม่ตั้ง NODE_ENV=production ตรงนี้: npm ci จะข้าม devDependencies และ tsx (ใช้รันซอร์ส TS) จะหาย
 COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY tsconfig.json ./
 COPY src ./src
 
+ENV NODE_ENV=production
+
 EXPOSE 4000
 
-# tsx ถูกติดตั้งเป็น devDependency จึงใช้ runtime เดียวกับ README (ไม่ต้อง build ก่อน)
-CMD ["./node_modules/.bin/tsx", "src/index.ts"]
+CMD ["npx", "--no-install", "tsx", "src/index.ts"]
