@@ -4,6 +4,9 @@ import { useEffect, useRef } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+const WS_URL = API_URL.replace(/^http/, "ws");
+
 interface TerminalProps {
   deploymentId: string;
   onStatusChange?: (status: "QUEUED" | "BUILDING" | "READY" | "FAILED") => void;
@@ -50,7 +53,7 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
     term.open(terminalRef.current);
     term.writeln(`\x1b[36m[STRATUS]\x1b[0m Connecting to log stream for \x1b[33m${deploymentId}\x1b[0m...`);
 
-    const ws = new WebSocket(`ws://localhost:4000/logs?deploymentId=${deploymentId}`);
+    const ws = new WebSocket(`${WS_URL}/logs?deploymentId=${deploymentId}`);
 
     ws.onopen = () => {
       term.writeln("\x1b[32m[CONNECTED]\x1b[0m WebSocket stream established with Redis Pub/Sub gateway.\n");
@@ -69,7 +72,7 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
     };
 
     ws.onerror = () => {
-      term.writeln("\x1b[31m[ERROR]\x1b[0m Failed to connect to WebSocket server at ws://localhost:4000/logs");
+      term.writeln(`\x1b[31m[ERROR]\x1b[0m Failed to connect to WebSocket server at ${WS_URL}/logs`);
     };
 
     ws.onclose = () => {

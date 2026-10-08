@@ -18,6 +18,9 @@ import {
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
 const Terminal = dynamic(() => import("@/components/Terminal"), { ssr: false });
 
+// URL ของ API ถูกฝังตอน build (NEXT_PUBLIC_API_URL) ค่าเริ่มต้นใช้ localhost สำหรับ dev
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+
 interface DeploymentState {
   deploymentId: string;
   status: "QUEUED" | "BUILDING" | "READY" | "FAILED";
@@ -66,7 +69,7 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch("http://localhost:4000/api/deploy", {
+      const response = await fetch(`${API_URL}/api/deploy`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
@@ -87,7 +90,7 @@ export default function Home() {
       });
     } catch (err) {
       console.error(err);
-      alert("Failed to connect to API server at http://localhost:4000");
+      alert(`Failed to connect to API server at ${API_URL}`);
     } finally {
       setIsDeploying(false);
     }

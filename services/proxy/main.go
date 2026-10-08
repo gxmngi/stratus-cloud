@@ -31,6 +31,9 @@ func NewProxyHandler() *ProxyHandler {
 	}
 
 	workspacePath := filepath.Join(exeDir, "..", "builder", "workspace")
+	if envDir := os.Getenv("WORKSPACE_DIR"); envDir != "" {
+		workspacePath = envDir
+	}
 	absPath, _ := filepath.Abs(workspacePath)
 
 	return &ProxyHandler{
