@@ -6,6 +6,13 @@ import Redis from 'ioredis';
 
 const docker = new Docker();
 
+// WORKSPACE_DIR: path ภายใน Process นี้ (ใน Container คือ /workspace)
+// HOST_WORKSPACE_PATH: path เดียวกันบน Host ที่ Docker Engine มองเห็น ใช้สำหรับ Bind Mount ของ Sandbox
+const WORKSPACE_ROOT = process.env.WORKSPACE_DIR
+    ? path.resolve(process.env.WORKSPACE_DIR)
+    : path.resolve(__dirname, '../workspace');
+const HOST_WORKSPACE_ROOT = process.env.HOST_WORKSPACE_PATH || WORKSPACE_ROOT;
+
 // Redis Client สำหรับ Publish Logs และส่ง Signal
 const redisPublisher = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -70,8 +77,9 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
         outputDir: customOutputDir,
     } = options;
 
-    const workspaceDir = path.resolve(__dirname, `../workspace/${deploymentId}`);
+    const workspaceDir = path.join(WORKSPACE_ROOT, deploymentId);
     const codeDir = path.join(workspaceDir, 'code');
+    const hostCodeDir = path.join(HOST_WORKSPACE_ROOT, deploymentId, 'code');
 
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Initializing build environment`);
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Workspace directory: ${workspaceDir}`);
@@ -155,7 +163,7 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Resolved build command: "${effectiveBuildCommand}"`);
 
     // Step 3: Initialize Docker Sandbox Container
-    const hostMountPath = codeDir.replace(/\\/g, '/');
+    const hostMountPath = hostCodeDir.replace(/\\/g, '/');
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
     // Format custom environment variables for Docker container
     const formattedEnv: string[] = [];

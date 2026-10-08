@@ -1,0 +1,92 @@
+name: stratus
+
+# รันด้วยคำสั่งเดียว: docker compose -f docker-compose.prod.yml up -d --build
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  api:
+    build:
+      context: ./services/api
+    restart: unless-stopped
+    environment:
+      PORT: "4000"
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+    ports:
+      - "4000:4000"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  builder:
+    build:
+      context: ./services/builder
+    restart: unless-stopped
+    environment:
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
+      WORKSPACE_DIR: /workspace
+      # path เดียวกันบน Host ที่ Docker Engine ใช้ Bind Mount ให้ Sandbox
+      HOST_WORKSPACE_PATH: ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}
+    volumes:
+      # ให้ Builder สั่ง Docker Engine ของ Host ได้ (Sandbox ทำงานเป็น Sibling Container)
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  proxy:
+    build:
+      context: ./services/proxy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8000:8000"
+    environment:
+      PORT: "8000"
+      WORKSPACE_DIR: /workspace
+      # ตั้งค่าเพื่อเปิด HTTPS อัตโนมัติ (Let's Encrypt). ปล่อยว่างเพื่อใช้ HTTP บน 8000 แบบเดิม
+      BASE_DOMAIN: ${BASE_DOMAIN:-}
+      TLS_DOMAINS: ${TLS_DOMAINS:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
+    volumes:
+      - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace:ro
+      - certs:/certs
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+  web:
+    build:
+      context: ./apps/web
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:4000}
+    restart: unless-stopped
+    environment:
+      PORT: "3000"
+      HOSTNAME: "0.0.0.0"
+    ports:
+      - "3000:3000"
+
+volumes:
+  redis_data:
+  certs:
