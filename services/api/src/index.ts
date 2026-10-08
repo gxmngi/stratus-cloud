@@ -4,13 +4,16 @@ import cors from 'cors';
 import { WebSocketServer, WebSocket } from 'ws';
 import Redis from 'ioredis';
 import url from 'url';
+import crypto from 'crypto';
+import { githubWebhookHandler } from './github';
 
 const app = express();
-const PORT = process.env.PORT || 4000;
 
-// อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
-app.use(cors());
-app.use(express.json());
+// รหัส Deployment แบบสุ่ม (กันชนกันของ Date.now().slice ที่ใช้เดิม)
+function newDeploymentId(): string {
+    return `dep-${crypto.randomBytes(4).toString('hex')}`;
+}
+const PORT = process.env.PORT || 4000;
 
 // Redis Client สำหรับ Push งานเข้า Queue
 const redisPublisher = new Redis({
@@ -20,6 +23,18 @@ const redisPublisher = new Redis({
 redisPublisher.on('error', (err) => {
     console.error('[REDIS] API Publisher connection error:', err.message);
 });
+
+// อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
+app.use(cors());
+
+// GitHub Webhook ต้องการ Raw Body สำหรับตรวจ HMAC จึงลงทะเบียนก่อน express.json()
+app.post(
+    '/api/webhooks/github',
+    express.raw({ type: 'application/json', limit: '5mb' }),
+    githubWebhookHandler(redisPublisher, newDeploymentId),
+);
+
+app.use(express.json());
 
 // สร้าง HTTP Server หลัก
 const server = http.createServer(app);
@@ -90,7 +105,7 @@ app.post('/api/deploy', async (req: Request, res: Response) => {
         return;
     }
 
-    const deploymentId = `dep-${Date.now().toString().slice(-6)}`;
+    const deploymentId = newDeploymentId();
     const liveUrl = `http://${deploymentId}.localhost:8000`;
 
     console.log(`[API] Received deployment request for ${gitUrl} -> ID: ${deploymentId}`);

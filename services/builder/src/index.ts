@@ -1,5 +1,6 @@
 import Redis from 'ioredis';
 import { runBuild, BuildOptions } from './builder';
+import { postCommitStatus, WebhookMeta } from './github';
 
 const redisConsumer = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -20,12 +21,26 @@ async function startWorker() {
             if (!result) continue;
 
             const [, jobPayload] = result;
-            const options: BuildOptions = JSON.parse(jobPayload);
+            const job: BuildOptions & Partial<WebhookMeta> = JSON.parse(jobPayload);
 
-            console.log(`\n[WORKER] Picked up job for deployment: ${options.deploymentId}`);
-            
-            const buildResult = await runBuild(options);
-            console.log(`[WORKER] Completed job for ${options.deploymentId} (Success: ${buildResult.success})`);
+            console.log(`\n[WORKER] Picked up job for deployment: ${job.deploymentId}`);
+
+            const hasStatus = job.repository && job.commitSha;
+            if (hasStatus) {
+                await postCommitStatus(job.repository!, job.commitSha!, 'pending', 'Stratus build running');
+            }
+
+            const buildResult = await runBuild(job);
+            console.log(`[WORKER] Completed job for ${job.deploymentId} (Success: ${buildResult.success})`);
+
+            if (hasStatus) {
+                await postCommitStatus(
+                    job.repository!,
+                    job.commitSha!,
+                    buildResult.success ? 'success' : 'failure',
+                    buildResult.success ? 'Stratus build succeeded' : 'Stratus build failed',
+                );
+            }
         } catch (err) {
             console.error('[FATAL] Worker loop error:', err);
             // รอ 1 วินาทีกัน CPU loop กรณี Redis หลุด
