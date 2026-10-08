@@ -3,6 +3,7 @@ import simpleGit from 'simple-git';
 import path from 'path';
 import fs from 'fs';
 import Redis from 'ioredis';
+import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 
 const docker = new Docker();
 
@@ -60,7 +61,9 @@ function resolveBuildCommand(codeDir: string, customCommand?: string): string {
 /**
  * ฟังก์ชันส่ง Log ทั้งออกทาง Local Console และยิงเข้า Redis Pub/Sub
  */
-async function emitLog(deploymentId: string, message: string) {
+async function emitLog(deploymentId: string, rawMessage: string) {
+    const message = maskSecrets(deploymentId, rawMessage);
+
     // พิมพ์ออก Console ของ Builder เอง
     process.stdout.write(message.endsWith('\n') ? message : message + '\n');
 
@@ -70,6 +73,14 @@ async function emitLog(deploymentId: string, message: string) {
 }
 
 export async function runBuild(options: BuildOptions): Promise<BuildResult> {
+    try {
+        return await runBuildInner(options);
+    } finally {
+        clearSecretMasker(options.deploymentId);
+    }
+}
+
+async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     const { 
         gitUrl, 
         deploymentId, 
@@ -167,14 +178,18 @@ export async function runBuild(options: BuildOptions): Promise<BuildResult> {
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
     // Format custom environment variables for Docker container
     const formattedEnv: string[] = [];
+    const secretValues: string[] = [];
     if (options.env && typeof options.env === 'object') {
         for (const [key, value] of Object.entries(options.env)) {
             // Security: Sanitize key to allow only valid environment variable names
-            if (/^[A-Za-z0-9_]+$/.test(key)) {
+            if (/^[A-Za-z0-9_]+$/.test(key) && typeof value === 'string') {
                 formattedEnv.push(`${key}=${value}`);
+                if (value.length > 0) secretValues.push(value);
             }
         }
     }
+    // ตั้งค่า Masker สำหรับ Deployment นี้: ค่า Secret จะถูกแทนที่ด้วย *** ก่อนส่งไปยัง Log/Redis
+    setSecretMasker(deploymentId, secretValues);
     if (formattedEnv.length > 0) {
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Injected ${formattedEnv.length} custom environment variable(s)`);
     }

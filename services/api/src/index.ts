@@ -15,6 +15,42 @@ function newDeploymentId(): string {
 }
 const PORT = process.env.PORT || 4000;
 
+const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
+const MAX_ENV_VARS = 100;
+const MAX_ENV_VALUE_LENGTH = 8 * 1024;
+
+type EnvResult = { ok: true; value: Record<string, string> } | { ok: false; error: string };
+
+// ตรวจและทำความสะอาด env payload ก่อนส่งเข้าคิว (ค่าว่างของ env ถูกอนุญาต)
+function normalizeEnv(input: unknown): EnvResult {
+    if (input === undefined || input === null) {
+        return { ok: true, value: {} };
+    }
+    if (typeof input !== 'object' || Array.isArray(input)) {
+        return { ok: false, error: 'Field "env" must be an object of string values' };
+    }
+
+    const entries = Object.entries(input as Record<string, unknown>);
+    if (entries.length > MAX_ENV_VARS) {
+        return { ok: false, error: `Too many env vars (max ${MAX_ENV_VARS})` };
+    }
+
+    const value: Record<string, string> = {};
+    for (const [key, raw] of entries) {
+        if (!ENV_KEY_PATTERN.test(key)) {
+            return { ok: false, error: `Invalid env key "${key}"` };
+        }
+        if (typeof raw !== 'string') {
+            return { ok: false, error: `Env value for "${key}" must be a string` };
+        }
+        if (raw.length > MAX_ENV_VALUE_LENGTH) {
+            return { ok: false, error: `Env value for "${key}" is too long` };
+        }
+        value[key] = raw;
+    }
+    return { ok: true, value };
+}
+
 // Redis Client สำหรับ Push งานเข้า Queue
 const redisPublisher = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -105,16 +141,23 @@ app.post('/api/deploy', async (req: Request, res: Response) => {
         return;
     }
 
+    // ตรวจ env: ต้องเป็น Object ของ string และ key เป็นชื่อ Environment Variable ที่ถูกต้องเท่านั้น
+    const envResult = normalizeEnv(env);
+    if (!envResult.ok) {
+        res.status(400).json({ error: envResult.error });
+        return;
+    }
+
     const deploymentId = newDeploymentId();
     const liveUrl = `http://${deploymentId}.localhost:8000`;
 
-    console.log(`[API] Received deployment request for ${gitUrl} -> ID: ${deploymentId}`);
+    console.log(`[API] Received deployment request for ${gitUrl} -> ID: ${deploymentId} (${Object.keys(envResult.value).length} env vars)`);
 
     const jobPayload = {
         deploymentId,
         gitUrl,
         buildCommand,
-        env: typeof env === 'object' && env !== null ? env : {},
+        env: envResult.value,
     };
 
     // ส่ง Job เข้า Redis Queue: "queue:build"
