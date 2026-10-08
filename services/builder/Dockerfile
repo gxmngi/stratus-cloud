@@ -5,9 +5,7 @@ RUN apk add --no-cache git docker-cli
 
 WORKDIR /app
 
-ENV NODE_ENV=production \
-    WORKSPACE_DIR=/workspace
-
+# ไม่ตั้ง NODE_ENV=production ตรงนี้: npm ci จะข้าม devDependencies และ tsx (ใช้รันซอร์ส TS) จะหาย
 COPY package.json package-lock.json ./
 RUN npm ci
 
@@ -16,4 +14,7 @@ COPY src ./src
 
 RUN mkdir -p /workspace
 
-CMD ["./node_modules/.bin/tsx", "src/index.ts"]
+ENV NODE_ENV=production \
+    WORKSPACE_DIR=/workspace
+
+CMD ["npx", "--no-install", "tsx", "src/index.ts"]
