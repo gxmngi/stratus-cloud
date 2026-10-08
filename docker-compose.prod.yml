@@ -56,12 +56,19 @@ services:
       context: ./services/proxy
     restart: unless-stopped
     ports:
+      - "80:80"
+      - "443:443"
       - "8000:8000"
     environment:
       PORT: "8000"
       WORKSPACE_DIR: /workspace
+      # ตั้งค่าเพื่อเปิด HTTPS อัตโนมัติ (Let's Encrypt). ปล่อยว่างเพื่อใช้ HTTP บน 8000 แบบเดิม
+      BASE_DOMAIN: ${BASE_DOMAIN:-}
+      TLS_DOMAINS: ${TLS_DOMAINS:-}
+      ACME_EMAIL: ${ACME_EMAIL:-}
     volumes:
       - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace:ro
+      - certs:/certs
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8000/healthz"]
       interval: 30s
@@ -82,3 +89,4 @@ services:
 
 volumes:
   redis_data:
+  certs:

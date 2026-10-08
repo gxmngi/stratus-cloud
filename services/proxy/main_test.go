@@ -32,6 +32,31 @@ func TestExtractSubdomain(t *testing.T) {
 	}
 }
 
+func TestExtractSubdomainWithBaseDomain(t *testing.T) {
+	p := &ProxyHandler{baseDomain: "stratus.example.com"}
+
+	tests := []struct {
+		host     string
+		expected string
+	}{
+		{"dep-1.stratus.example.com", "dep-1"},
+		{"DEP-1.Stratus.Example.com:443", "dep-1"},
+		{"stratus.example.com", ""},
+		{"evil.com", ""},
+		{"dep-1.evil.com", ""},
+		{"a.b.stratus.example.com", ""},
+		{"dep-1.stratus.example.com.evil.com", ""},
+		{"localhost:8000", ""},
+	}
+
+	for _, tc := range tests {
+		got := p.extractSubdomain(tc.host)
+		if got != tc.expected {
+			t.Errorf("extractSubdomain(%q) = %q; want %q", tc.host, got, tc.expected)
+		}
+	}
+}
+
 func TestHealthz(t *testing.T) {
 	p := &ProxyHandler{}
 	req := httptest.NewRequest("GET", "/healthz", nil)
