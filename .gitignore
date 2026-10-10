@@ -13,6 +13,13 @@ out/
 workspace/
 **/workspace/
 
+# Databases & Persistence
+*.db
+*.db-shm
+*.db-wal
+data/
+**/data/
+
 # Fixtures build artifacts
 fixtures/**/dist/
 fixtures/**/node_modules/

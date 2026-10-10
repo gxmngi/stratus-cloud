@@ -51,36 +51,59 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
     });
 
     term.open(terminalRef.current);
-    term.writeln(`\x1b[36m[STRATUS]\x1b[0m Connecting to log stream for \x1b[33m${deploymentId}\x1b[0m...`);
+    term.writeln(`\x1b[36m[STRATUS]\x1b[0m Loading log buffer for \x1b[33m${deploymentId}\x1b[0m...`);
 
-    const ws = new WebSocket(`${WS_URL}/logs?deploymentId=${deploymentId}`);
+    let isSubscribed = true;
+    let ws: WebSocket | null = null;
 
-    ws.onopen = () => {
-      term.writeln("\x1b[32m[CONNECTED]\x1b[0m WebSocket stream established with Redis Pub/Sub gateway.\n");
-      onStatusChangeRef.current?.("BUILDING");
-    };
+    // 1. Fetch persisted logs from SQLite first (Instant Log Replay)
+    fetch(`${API_URL}/api/deployments/${deploymentId}/logs`)
+      .then((res) => (res.ok ? res.json() : { logs: [] }))
+      .then((data: { logs: string[] }) => {
+        if (!isSubscribed) return;
 
-    ws.onmessage = (event) => {
-      const message = event.data as string;
-      term.write(message);
+        if (data.logs && data.logs.length > 0) {
+          term.writeln("\x1b[90m--- PERSISTED LOG REPLAY START ---\x1b[0m");
+          for (const line of data.logs) {
+            term.write(line.endsWith("\n") ? line : line + "\r\n");
+          }
+          term.writeln("\x1b[90m--- PERSISTED LOG REPLAY END ---\x1b[0m\n");
+        }
 
-      if (message.includes("[STATUS] READY")) {
-        onStatusChangeRef.current?.("READY");
-      } else if (message.includes("[STATUS] FAILED")) {
-        onStatusChangeRef.current?.("FAILED");
-      }
-    };
+        // 2. Connect to live WebSocket stream
+        ws = new WebSocket(`${WS_URL}/logs?deploymentId=${deploymentId}`);
 
-    ws.onerror = () => {
-      term.writeln(`\x1b[31m[ERROR]\x1b[0m Failed to connect to WebSocket server at ${WS_URL}/logs`);
-    };
+        ws.onopen = () => {
+          term.writeln("\x1b[32m[CONNECTED]\x1b[0m Live WebSocket stream connected to Redis Pub/Sub.\n");
+          onStatusChangeRef.current?.("BUILDING");
+        };
 
-    ws.onclose = () => {
-      term.writeln("\n\x1b[90m[DISCONNECTED] Log stream closed.\x1b[0m");
-    };
+        ws.onmessage = (event) => {
+          const message = event.data as string;
+          term.write(message.replace(/\n/g, "\r\n"));
+
+          if (message.includes("[STATUS] READY")) {
+            onStatusChangeRef.current?.("READY");
+          } else if (message.includes("[STATUS] FAILED")) {
+            onStatusChangeRef.current?.("FAILED");
+          }
+        };
+
+        ws.onerror = () => {
+          term.writeln(`\x1b[90m[NOTE] Live stream closed or inactive (viewing static log history).\x1b[0m`);
+        };
+
+        ws.onclose = () => {
+          term.writeln("\x1b[90m[DISCONNECTED] Live log stream closed.\x1b[0m");
+        };
+      })
+      .catch((err) => {
+        console.error("Failed to fetch historical logs:", err);
+      });
 
     return () => {
-      ws.close();
+      isSubscribed = false;
+      if (ws) ws.close();
       term.dispose();
     };
   }, [deploymentId]); // พึ่งพาเฉพาะ deploymentId ตัวเดียวเท่านั้น

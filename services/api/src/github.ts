@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response } from 'express';
 import Redis from 'ioredis';
+import { dbService } from './db';
 
 // Branch ที่จะ Deploy อัตโนมัติเมื่อมีการ push
 const DEPLOY_REFS = ['refs/heads/main', 'refs/heads/master'];
@@ -85,6 +86,20 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
         const deploymentId = newDeploymentId();
         const commitMessage = (payload.head_commit?.message ?? '').split('\n')[0];
         const pusher = payload.pusher?.name ?? 'unknown';
+
+        const project = dbService.getOrCreateProject(cloneUrl);
+        dbService.createDeployment({
+            id: deploymentId,
+            project_id: project.id,
+            git_url: cloneUrl,
+            status: 'QUEUED',
+            live_url: `http://${deploymentId}.localhost:8000`,
+            trigger_type: 'webhook',
+            commit_sha: sha,
+            commit_message: commitMessage,
+            pusher: pusher,
+            created_at: Date.now(),
+        });
 
         const job = {
             deploymentId,

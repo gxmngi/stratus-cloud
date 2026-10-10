@@ -22,7 +22,10 @@ services:
       PORT: "4000"
       REDIS_HOST: redis
       REDIS_PORT: "6379"
+      DATA_DIR: /data
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
+    volumes:
+      - stratus_data:/data
     ports:
       - "4000:4000"
     depends_on:
@@ -94,3 +97,4 @@ services:
 volumes:
   redis_data:
   certs:
+  stratus_data:
