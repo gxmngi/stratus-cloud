@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -139,3 +140,46 @@ func TestServeArtifactAndPathTraversalProtection(t *testing.T) {
 		t.Fatalf("expected 403 Forbidden for traversal, got %d", recTraverse.Code)
 	}
 }
+
+func TestDynamicContainerReverseProxy(t *testing.T) {
+	// 1. Create a mock dynamic upstream container server
+	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"running","service":"dynamic-backend-api"}`))
+	}))
+	defer upstreamServer.Close()
+
+	// Extract port from upstreamServer URL (e.g. "http://127.0.0.1:52134")
+	parts := strings.Split(upstreamServer.URL, ":")
+	upstreamPort := parts[len(parts)-1]
+
+	// 2. Setup mock workspace with runtime.json pointing to mock upstream container
+	tempDir := t.TempDir()
+	depDir := filepath.Join(tempDir, "dep-dynamic-app")
+	if err := os.MkdirAll(depDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	runtimeJSON := fmt.Sprintf(`{"type":"dynamic","port":%s,"containerId":"c-mock-123"}`, upstreamPort)
+	if err := os.WriteFile(filepath.Join(depDir, "runtime.json"), []byte(runtimeJSON), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &ProxyHandler{workspaceBase: tempDir}
+
+	// 3. Request through Proxy with subdomain mapping
+	req := httptest.NewRequest("GET", "/api/v1/health", nil)
+	req.Host = "dep-dynamic-app.localhost:8000"
+	rec := httptest.NewRecorder()
+
+	p.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK from reverse proxy, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "dynamic-backend-api") {
+		t.Errorf("expected proxied body to contain 'dynamic-backend-api', got: %s", rec.Body.String())
+	}
+}
+

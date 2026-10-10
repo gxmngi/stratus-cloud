@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import Redis from 'ioredis';
 import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
+import { findAvailablePort } from './port-allocator';
 
 const docker = new Docker();
 
@@ -27,6 +28,7 @@ export interface BuildOptions {
     gitUrl: string;
     deploymentId: string;
     buildCommand?: string;
+    startCommand?: string;
     outputDir?: string;
     env?: Record<string, string>;
 }
@@ -35,6 +37,8 @@ export interface BuildResult {
     success: boolean;
     exitCode: number;
     artifactPath: string | null;
+    runtimeType?: 'static' | 'dynamic';
+    containerPort?: number | null;
     error?: string;
 }
 
@@ -46,16 +50,57 @@ function resolveBuildCommand(codeDir: string, customCommand?: string): string {
         return customCommand;
     }
 
+    const pkgPath = path.join(codeDir, 'package.json');
+    let hasBuildScript = true;
+    if (fs.existsSync(pkgPath)) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (!pkg.scripts || !pkg.scripts.build) {
+                hasBuildScript = false;
+            }
+        } catch {}
+    }
+
     if (fs.existsSync(path.join(codeDir, 'pnpm-lock.yaml'))) {
-        return 'npx --yes pnpm install && npx --yes pnpm run build';
+        return hasBuildScript ? 'npx --yes pnpm install && npx --yes pnpm run build' : 'npx --yes pnpm install';
     }
     if (fs.existsSync(path.join(codeDir, 'yarn.lock'))) {
-        return 'npx --yes yarn install && npx --yes yarn run build';
+        return hasBuildScript ? 'npx --yes yarn install && npx --yes yarn run build' : 'npx --yes yarn install';
     }
     if (fs.existsSync(path.join(codeDir, 'bun.lockb'))) {
-        return 'npx --yes bun install && npx --yes bun run build';
+        return hasBuildScript ? 'npx --yes bun install && npx --yes bun run build' : 'npx --yes bun install';
     }
-    return 'npm install && npm run build';
+    return hasBuildScript ? 'npm install && npm run build' : 'npm install';
+}
+
+/**
+ * ตรวจจับคำสั่ง Start Server สำหรับรัน Dynamic Application Container
+ */
+function resolveStartCommand(codeDir: string, customStartCommand?: string): string | null {
+    if (customStartCommand) {
+        return customStartCommand;
+    }
+
+    const pkgPath = path.join(codeDir, 'package.json');
+    if (fs.existsSync(pkgPath)) {
+        try {
+            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
+            if (pkg.scripts && pkg.scripts.start) {
+                return 'npm start';
+            }
+            if (pkg.main && fs.existsSync(path.join(codeDir, pkg.main))) {
+                return `node ${pkg.main}`;
+            }
+        } catch {}
+    }
+
+    for (const entry of ['server.js', 'app.js', 'index.js', 'main.js']) {
+        if (fs.existsSync(path.join(codeDir, entry))) {
+            return `node ${entry}`;
+        }
+    }
+
+    return null;
 }
 
 /**
@@ -243,7 +288,7 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     // Step 6: Cleanup Container
     await container.remove();
 
-    // Step 7: Detect Build Artifacts
+    // Step 7: Detect Runtime Type (Static Site vs Dynamic Container)
     const possibleDirs = customOutputDir 
         ? [path.join(codeDir, customOutputDir)]
         : [
@@ -254,10 +299,20 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         ];
 
     const detectedDir = possibleDirs.find((dir) => fs.existsSync(dir));
+    const isStaticApp = detectedDir && (
+        fs.existsSync(path.join(detectedDir, 'index.html')) || 
+        detectedDir.endsWith('.next')
+    );
 
-    if (result.StatusCode === 0 && detectedDir) {
+    // Case A: Static Site Deployment
+    if (result.StatusCode === 0 && isStaticApp && detectedDir) {
         const generatedFiles = fs.readdirSync(detectedDir);
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Build succeeded`);
+        fs.writeFileSync(
+            path.join(workspaceDir, 'runtime.json'),
+            JSON.stringify({ type: 'static', updatedAt: Date.now() }, null, 2)
+        );
+
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Static build succeeded`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact location: ${detectedDir}`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact contents: [${generatedFiles.slice(0, 8).join(', ')}]`);
         await emitLog(deploymentId, `[STATUS] READY`);
@@ -266,15 +321,126 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             success: true,
             exitCode: 0,
             artifactPath: detectedDir,
+            runtimeType: 'static',
         };
     }
 
-    await emitLog(deploymentId, `[ERROR] [${deploymentId}] Build failed or no build artifacts detected`);
+    // Case B: Dynamic Application Container Deployment
+    const startCmd = resolveStartCommand(codeDir, options.startCommand);
+    if (result.StatusCode === 0 && startCmd) {
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Detected dynamic server application`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Launching application container: "${startCmd}"`);
+
+        const allocatedPort = await findAvailablePort();
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Allocated dynamic host port: ${allocatedPort}`);
+
+        let runContainer: Docker.Container;
+        try {
+            // Remove previous container if already exists with same name
+            try {
+                const oldContainer = docker.getContainer(`stratus-${deploymentId}`);
+                await oldContainer.remove({ force: true });
+            } catch {}
+
+            runContainer = await docker.createContainer({
+                name: `stratus-${deploymentId}`,
+                Image: 'node:20-alpine',
+                Cmd: ['sh', '-c', startCmd],
+                WorkingDir: '/app',
+                Env: [
+                    ...formattedEnv,
+                    'PORT=3000',
+                    'NODE_ENV=production',
+                    `STRATUS_DEPLOYMENT_ID=${deploymentId}`,
+                ],
+                ExposedPorts: {
+                    '3000/tcp': {},
+                },
+                HostConfig: {
+                    Binds: [`${hostMountPath}:/app`],
+                    PortBindings: {
+                        '3000/tcp': [{ HostPort: String(allocatedPort), HostIp: '0.0.0.0' }],
+                    },
+                    Memory: 1024 * 1024 * 1024,
+                    CpuQuota: 100000,
+                    RestartPolicy: { Name: 'unless-stopped' },
+                },
+                Tty: true,
+            });
+
+            const runStream = await runContainer.attach({
+                stream: true,
+                stdout: true,
+                stderr: true,
+            });
+            runStream.on('data', (chunk: Buffer) => {
+                emitLog(deploymentId, `[APP] ${chunk.toString()}`).catch(() => {});
+            });
+
+            await runContainer.start();
+        } catch (err: unknown) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            await emitLog(deploymentId, `[ERROR] [${deploymentId}] Failed to launch container: ${errorMsg}`);
+            await emitLog(deploymentId, `[STATUS] FAILED`);
+            return {
+                success: false,
+                exitCode: 1,
+                artifactPath: null,
+                runtimeType: 'dynamic',
+                error: errorMsg,
+            };
+        }
+
+        // Write runtime.json for Go Reverse Proxy routing
+        fs.writeFileSync(
+            path.join(workspaceDir, 'runtime.json'),
+            JSON.stringify({
+                type: 'dynamic',
+                port: allocatedPort,
+                containerId: runContainer.id,
+                targetPort: 3000,
+                updatedAt: Date.now(),
+            }, null, 2)
+        );
+
+        // Health check probe
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Probing container health on port ${allocatedPort}...`);
+        let isHealthy = false;
+        for (let i = 0; i < 20; i++) {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+            try {
+                const probeRes = await fetch(`http://127.0.0.1:${allocatedPort}/`);
+                if (probeRes.status < 500) {
+                    isHealthy = true;
+                    break;
+                }
+            } catch {}
+        }
+
+        if (isHealthy) {
+            await emitLog(deploymentId, `[INFO] [${deploymentId}] Health check passed (HTTP responsive)`);
+        } else {
+            await emitLog(deploymentId, `[WARN] [${deploymentId}] Container running, waiting for incoming traffic`);
+        }
+
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Dynamic container running at http://${deploymentId}.localhost:8000`);
+        await emitLog(deploymentId, `[STATUS] READY`);
+
+        return {
+            success: true,
+            exitCode: 0,
+            artifactPath: null,
+            runtimeType: 'dynamic',
+            containerPort: allocatedPort,
+        };
+    }
+
+    await emitLog(deploymentId, `[ERROR] [${deploymentId}] Build completed but neither static artifacts (dist/index.html) nor dynamic server entrypoint was found`);
     await emitLog(deploymentId, `[STATUS] FAILED`);
     return {
         success: false,
         exitCode: result.StatusCode,
         artifactPath: null,
-        error: 'Build failed or missing output directory',
+        error: 'No static artifacts or server entrypoint detected',
     };
 }

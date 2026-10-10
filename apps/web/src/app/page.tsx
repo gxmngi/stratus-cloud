@@ -29,6 +29,8 @@ interface DeploymentItem {
   git_url: string;
   status: "QUEUED" | "BUILDING" | "READY" | "FAILED";
   live_url: string;
+  runtime_type?: "static" | "dynamic";
+  container_port?: number | null;
   duration_ms?: number | null;
   commit_message?: string | null;
   created_at: number;
@@ -235,7 +237,15 @@ export default function Home() {
                 onClick={() => setGitUrl("fixtures/demo-app")}
                 className="text-zinc-400 hover:text-white underline decoration-zinc-700 underline-offset-2 cursor-pointer"
               >
-                Local Demo App (fixtures/demo-app)
+                Static App (fixtures/demo-app)
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={() => setGitUrl("fixtures/demo-server")}
+                className="text-purple-400 hover:text-purple-300 underline decoration-purple-800 underline-offset-2 cursor-pointer"
+              >
+                Dynamic Server (fixtures/demo-server)
               </button>
             </div>
 
@@ -352,26 +362,33 @@ export default function Home() {
                         <span className="text-xs font-semibold text-white truncate">
                           {dep.id}
                         </span>
-                        {dep.status === "READY" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            READY
-                          </span>
-                        )}
-                        {dep.status === "BUILDING" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
-                            BUILDING
-                          </span>
-                        )}
-                        {dep.status === "QUEUED" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                            QUEUED
-                          </span>
-                        )}
-                        {dep.status === "FAILED" && (
-                          <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">
-                            FAILED
-                          </span>
-                        )}
+                        <div className="flex items-center gap-1">
+                          {dep.runtime_type === "dynamic" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                              ⚡ SERVER
+                            </span>
+                          )}
+                          {dep.status === "READY" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                              READY
+                            </span>
+                          )}
+                          {dep.status === "BUILDING" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
+                              BUILDING
+                            </span>
+                          )}
+                          {dep.status === "QUEUED" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
+                              QUEUED
+                            </span>
+                          )}
+                          {dep.status === "FAILED" && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">
+                              FAILED
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       <div className="text-[11px] text-zinc-400 truncate mb-1">
@@ -408,6 +425,11 @@ export default function Home() {
                         <h3 className="font-mono text-sm font-semibold text-white">
                           {activeDeployment.id}
                         </h3>
+                        {activeDeployment.runtime_type === "dynamic" && (
+                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20">
+                            ⚡ DYNAMIC CONTAINER
+                          </span>
+                        )}
                         {activeDeployment.status === "QUEUED" && (
                           <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
                             QUEUED
