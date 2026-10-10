@@ -6,8 +6,12 @@ import Redis from 'ioredis';
 import url from 'url';
 import crypto from 'crypto';
 import { githubWebhookHandler } from './github';
+import { initDatabase, dbService } from './db';
 
 const app = express();
+
+// Initialize SQLite database
+initDatabase();
 
 // รหัส Deployment แบบสุ่ม (กันชนกันของ Date.now().slice ที่ใช้เดิม)
 function newDeploymentId(): string {
@@ -58,6 +62,38 @@ const redisPublisher = new Redis({
 });
 redisPublisher.on('error', (err) => {
     console.error('[REDIS] API Publisher connection error:', err.message);
+});
+
+// Redis Subscriber สำหรับบันทึก Logs ทุก Deployment ลง SQLite แบบรวมศูนย์
+const redisLogCollector = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT) || 6379,
+});
+redisLogCollector.psubscribe('logs:*', (err) => {
+    if (err) {
+        console.error('[REDIS] Failed to subscribe to logs:* pattern:', err.message);
+    } else {
+        console.log('[REDIS] Log persistence worker subscribed to pattern: logs:*');
+    }
+});
+
+redisLogCollector.on('pmessage', (pattern, channel, message) => {
+    const deploymentId = channel.replace('logs:', '');
+    if (!deploymentId) return;
+
+    try {
+        dbService.appendLog(deploymentId, message);
+
+        if (message.includes('[STATUS] READY')) {
+            dbService.updateDeploymentStatus(deploymentId, 'READY');
+        } else if (message.includes('[STATUS] FAILED')) {
+            dbService.updateDeploymentStatus(deploymentId, 'FAILED', message);
+        } else if (message.includes('Initializing build environment')) {
+            dbService.updateDeploymentStatus(deploymentId, 'BUILDING');
+        }
+    } catch (dbErr) {
+        console.error(`[DB] Error persisting log for ${deploymentId}:`, dbErr);
+    }
 });
 
 // อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
@@ -132,7 +168,30 @@ app.get('/api/health', (req: Request, res: Response) => {
     res.json({ status: 'ok', service: 'stratus-api', timestamp: new Date().toISOString() });
 });
 
-// Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว
+// ดึงรายการประวัติการ Deploy ทั้งหมด (รองรับ Pagination)
+app.get('/api/deployments', (req: Request, res: Response) => {
+    const limit = Number(req.query.limit) || 50;
+    const deployments = dbService.getDeployments(limit);
+    res.json({ deployments });
+});
+
+// ดึงรายละเอียด Deployment เดี่ยว
+app.get('/api/deployments/:id', (req: Request, res: Response) => {
+    const deployment = dbService.getDeployment(req.params.id as string);
+    if (!deployment) {
+        res.status(404).json({ error: 'Deployment not found' });
+        return;
+    }
+    res.json({ deployment });
+});
+
+// ดึงประวัติ Logs ย้อนหลังของ Deployment
+app.get('/api/deployments/:id/logs', (req: Request, res: Response) => {
+    const logs = dbService.getDeploymentLogs(req.params.id as string);
+    res.json({ logs: logs.map(l => l.message) });
+});
+
+// Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว พร้อมบันทึกลง SQLite
 app.post('/api/deploy', async (req: Request, res: Response) => {
     const { gitUrl, buildCommand, env } = req.body;
 
@@ -153,23 +212,44 @@ app.post('/api/deploy', async (req: Request, res: Response) => {
 
     console.log(`[API] Received deployment request for ${gitUrl} -> ID: ${deploymentId} (${Object.keys(envResult.value).length} env vars)`);
 
-    const jobPayload = {
-        deploymentId,
-        gitUrl,
-        buildCommand,
-        env: envResult.value,
-    };
+    try {
+        const project = dbService.getOrCreateProject(gitUrl);
+        dbService.createDeployment({
+            id: deploymentId,
+            project_id: project.id,
+            git_url: gitUrl,
+            status: 'QUEUED',
+            live_url: liveUrl,
+            build_command: buildCommand || null,
+            trigger_type: 'manual',
+            created_at: Date.now(),
+        });
 
-    // ส่ง Job เข้า Redis Queue: "queue:build"
-    await redisPublisher.rpush('queue:build', JSON.stringify(jobPayload));
+        const jobPayload = {
+            deploymentId,
+            gitUrl,
+            buildCommand,
+            env: envResult.value,
+        };
 
-    // ตอบกลับผู้ใช้ทันที (Non-blocking / Asynchronous Response)
-    res.status(202).json({
-        deploymentId,
-        status: 'QUEUED',
-        liveUrl,
-        logStreamUrl: `ws://localhost:${PORT}/logs?deploymentId=${deploymentId}`,
-    });
+        // ส่ง Job เข้า Redis Queue: "queue:build"
+        await redisPublisher.rpush('queue:build', JSON.stringify(jobPayload));
+
+        // ตอบกลับผู้ใช้ทันที (Non-blocking / Asynchronous Response)
+        res.status(202).json({
+            deploymentId,
+            status: 'QUEUED',
+            liveUrl,
+            logStreamUrl: `ws://localhost:${PORT}/logs?deploymentId=${deploymentId}`,
+        });
+    } catch (err) {
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error('[API] Error queuing deployment job:', errorMsg);
+        res.status(503).json({ 
+            error: 'Failed to dispatch deployment job',
+            details: errorMsg 
+        });
+    }
 });
 
 // สั่งรัน Server

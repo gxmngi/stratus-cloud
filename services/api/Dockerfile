@@ -1,5 +1,7 @@
 FROM node:20-alpine
 
+RUN apk add --no-cache python3 make g++
+
 WORKDIR /app
 
 # ไม่ตั้ง NODE_ENV=production ตรงนี้: npm ci จะข้าม devDependencies และ tsx (ใช้รันซอร์ส TS) จะหาย
