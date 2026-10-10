@@ -1,10 +1,13 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -117,6 +120,40 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 1. Dynamic Container Runtime Check:
+	// ตรวจสอบว่า Deployment นี้รันเป็น Dynamic App (Server/API Container) หรือไม่
+	runtimeFile := filepath.Join(p.workspaceBase, subdomain, "runtime.json")
+	if data, err := os.ReadFile(runtimeFile); err == nil {
+		var runtimeMeta struct {
+			Type string `json:"type"`
+			Port int    `json:"port"`
+		}
+		if err := json.Unmarshal(data, &runtimeMeta); err == nil && runtimeMeta.Type == "dynamic" && runtimeMeta.Port > 0 {
+			targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", runtimeMeta.Port))
+			if err != nil {
+				http.Error(w, "Bad Gateway: Invalid upstream URL", http.StatusBadGateway)
+				return
+			}
+
+			proxy := httputil.NewSingleHostReverseProxy(targetURL)
+			proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+				log.Printf("[PROXY] Error proxying to container port %d: %v", runtimeMeta.Port, proxyErr)
+				http.Error(rw, fmt.Sprintf("502 Bad Gateway: Application container on port %d unreachable", runtimeMeta.Port), http.StatusBadGateway)
+			}
+
+			origDirector := proxy.Director
+			proxy.Director = func(req *http.Request) {
+				origDirector(req)
+				req.Header.Set("X-Forwarded-Host", req.Host)
+				req.Header.Set("X-Forwarded-Proto", "http")
+			}
+
+			proxy.ServeHTTP(w, r)
+			return
+		}
+	}
+
+	// 2. Static File Serving (Fallback):
 	// Path ไปยัง Artifact โฟลเดอร์ dist, build, หรือ out ของ Deployment นั้น
 	candidates := []string{"dist", "build", "out"}
 	var deploymentDistDir string

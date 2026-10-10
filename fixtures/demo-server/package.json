@@ -1,0 +1,9 @@
+{
+  "name": "demo-server",
+  "version": "1.0.0",
+  "description": "Dynamic server application fixture for Stratus Cloud",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  }
+}

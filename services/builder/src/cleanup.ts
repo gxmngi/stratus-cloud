@@ -1,5 +1,8 @@
 import fs from 'fs';
 import path from 'path';
+import Docker from 'dockerode';
+
+const docker = new Docker();
 
 export interface CleanupResult {
     inspected: number;
@@ -27,9 +30,13 @@ export function cleanupWorkspaces(workspaceRoot: string, maxAgeMs = 24 * 60 * 60
                 result.inspected++;
                 const age = now - stats.mtimeMs;
                 if (age > maxAgeMs) {
+                    try {
+                        const container = docker.getContainer(`stratus-${entry}`);
+                        container.remove({ force: true }).catch(() => {});
+                    } catch {}
                     fs.rmSync(entryPath, { recursive: true, force: true });
                     result.deleted++;
-                    console.log(`[CLEANUP] Pruned expired workspace: ${entry} (age: ${Math.round(age / 3600000)}h)`);
+                    console.log(`[CLEANUP] Pruned expired workspace and container: ${entry} (age: ${Math.round(age / 3600000)}h)`);
                 }
             }
         } catch (err) {

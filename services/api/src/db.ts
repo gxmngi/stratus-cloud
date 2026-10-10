@@ -35,6 +35,8 @@ export function initDatabase() {
             status TEXT NOT NULL,
             live_url TEXT NOT NULL,
             build_command TEXT,
+            runtime_type TEXT DEFAULT 'static',
+            container_port INTEGER,
             trigger_type TEXT DEFAULT 'manual',
             commit_sha TEXT,
             commit_message TEXT,
@@ -58,6 +60,11 @@ export function initDatabase() {
         CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
         CREATE INDEX IF NOT EXISTS idx_logs_deployment_id ON deployment_logs(deployment_id, id ASC);
     `);
+
+    // Schema migrations for existing databases
+    try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
+    try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
+
     console.log(`[DB] SQLite initialized at: ${DB_FILE}`);
 }
 
@@ -76,6 +83,8 @@ export interface DeploymentRecord {
     status: 'QUEUED' | 'BUILDING' | 'READY' | 'FAILED';
     live_url: string;
     build_command?: string | null;
+    runtime_type?: 'static' | 'dynamic';
+    container_port?: number | null;
     trigger_type?: string;
     commit_sha?: string | null;
     commit_message?: string | null;
@@ -122,6 +131,8 @@ export const dbService = {
             status: record.status,
             live_url: record.live_url,
             build_command: record.build_command ?? null,
+            runtime_type: record.runtime_type ?? 'static',
+            container_port: record.container_port ?? null,
             trigger_type: record.trigger_type ?? 'manual',
             commit_sha: record.commit_sha ?? null,
             commit_message: record.commit_message ?? null,
@@ -132,12 +143,20 @@ export const dbService = {
         db.prepare(`
             INSERT INTO deployments (
                 id, project_id, git_url, status, live_url, build_command,
-                trigger_type, commit_sha, commit_message, pusher, created_at
+                runtime_type, container_port, trigger_type, commit_sha, commit_message, pusher, created_at
             ) VALUES (
                 @id, @project_id, @git_url, @status, @live_url, @build_command,
-                @trigger_type, @commit_sha, @commit_message, @pusher, @created_at
+                @runtime_type, @container_port, @trigger_type, @commit_sha, @commit_message, @pusher, @created_at
             )
         `).run(payload);
+    },
+
+    updateDeploymentRuntime(id: string, runtimeType: 'static' | 'dynamic', port?: number): void {
+        db.prepare(`
+            UPDATE deployments 
+            SET runtime_type = ?, container_port = ?
+            WHERE id = ?
+        `).run(runtimeType, port || null, id);
     },
 
     updateDeploymentStatus(

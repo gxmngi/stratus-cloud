@@ -84,6 +84,16 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
     try {
         dbService.appendLog(deploymentId, message);
 
+        if (message.includes('Allocated dynamic host port:')) {
+            const match = message.match(/Allocated dynamic host port:\s*(\d+)/);
+            if (match) {
+                const port = parseInt(match[1], 10);
+                dbService.updateDeploymentRuntime(deploymentId, 'dynamic', port);
+            }
+        } else if (message.includes('Static build succeeded')) {
+            dbService.updateDeploymentRuntime(deploymentId, 'static');
+        }
+
         if (message.includes('[STATUS] READY')) {
             dbService.updateDeploymentStatus(deploymentId, 'READY');
         } else if (message.includes('[STATUS] FAILED')) {
