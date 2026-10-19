@@ -21,9 +21,11 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 ## Key Architectural Highlights
 
 * **Polyglot Monorepo Design:** Clean separation of concerns featuring a Next.js 15 UI, a TypeScript Builder & Orchestrator, and a high-performance edge proxy written in Go.
-* **Isolated Ephemeral Sandboxes:** Every build executes inside a throwaway Docker container (`node:20-alpine`) with strict resource constraints (1GB RAM, 1.0 CPU quota) to isolate and shield the host from malicious supply-chain scripts.
+* **Isolated Ephemeral Sandboxes & Linux Security Hardening:** Every build executes inside a throwaway Docker container (`node:20-alpine`) with strict resource constraints (1GB RAM, 1GB Swap, 1.0 CPU quota, `PidsLimit: 256` fork-bomb defense), root capability dropping (`CapDrop: ['ALL']`), and `no-new-privileges:true` kernel execution fences.
 * **Intelligent Package Manager Auto-Detection:** Inspects project root files on the fly and dynamically switches between `pnpm`, `yarn`, `bun`, and `npm` without requiring manual configuration.
-* **High-Performance Go Edge Proxy:** Built with 100% Go Standard Library (`net/http`). Handles dynamic subdomain routing (`*.localhost:8000`), RFC 6761 localhost wildcard resolution, Path Traversal security guards, and Single Page Application (SPA) client-side routing fallbacks.
+* **In-Memory Go Edge Proxy & Dynamic Cache Invalidation:** Sub-millisecond $O(1)$ in-memory routing table with pre-warmed connection pools and zero-disk per-request I/O. Supports instant hot-reloading via Redis Pub/Sub (`proxy:routes`) and internal REST control planes.
+* **Zero-Downtime Blue-Green Project Aliases:** Atomic production traffic routing (`http://<project-slug>.localhost:8000`) with persistent SQLite state and 1-click instantaneous promotion from preview deployments.
+* **At-Least-Once Resilient Job Pipeline:** Task ingestion powered by Redis Streams (`XADD`/`XREADGROUP`) with consumer groups, automatic crash recovery (`XAUTOCLAIM`), and 15-minute container execution timeout fencing.
 * **Decoupled Real-Time Log Pipeline:** Completely separates build workers from web clients using Redis Pub/Sub channels and WebSockets, streaming container `stdout`/`stderr` line-by-line directly to an embedded `xterm.js` terminal emulator.
 
 ---
@@ -42,13 +44,13 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 | Stage | Source → Target | Action | Transport / Protocol |
 | :--- | :--- | :--- | :--- |
 | **1. Ingest** | `apps/web` → `services/api` | Dispatches deployment trigger | HTTP POST (`/api/deploy`) |
-| **2. Enqueue** | `services/api` → Redis | Pushes task to background queue | Redis `LPUSH queue:build` |
-| **3. Dequeue** | Redis → `services/builder` | Worker pulls next available task | Redis `BLPOP queue:build` |
-| **4. Sandbox** | `services/builder` → Docker | Provisions ephemeral container | Docker Engine API (`node:20-alpine`) |
+| **2. Enqueue** | `services/api` → Redis | Pushes task to resilient Stream | Redis Stream `XADD stream:build` |
+| **3. Dequeue** | Redis → `services/builder` | Worker pulls task via consumer group with auto-claim recovery | Redis `XREADGROUP` / `XAUTOCLAIM` |
+| **4. Sandbox** | `services/builder` → Docker | Provisions hardened ephemeral container (CapDrop, PidsLimit) | Docker Engine API (`node:20-alpine`) |
 | **5. Stream** | Docker → Redis Pub/Sub | Publishes real-time build logs | Redis `PUBLISH logs:<id>` |
 | **6. Relay** | Redis Pub/Sub → `apps/web` | Forwards log stream to UI | WebSockets (`ws://localhost:4000`) |
-| **7. Export** | `services/builder` → Storage | Verifies output directory (`dist/`) | Local Workspace Cache |
-| **8. Serve** | Client → `services/proxy` | Routes requests by subdomain | Go Reverse Proxy (`:8000`) |
+| **7. Register** | `services/builder` → Edge Proxy | Registers dynamic route in-memory & broadcasts invalidation | Redis Pub/Sub `proxy:routes` & REST API |
+| **8. Serve** | Client → `services/proxy` | Resolves preview & production alias traffic from in-memory cache | Go Reverse Proxy (`:8000`) |
 
 ### Topology Flowchart
 
@@ -63,23 +65,24 @@ flowchart LR
     end
 
     subgraph Broker ["02. Message Bus & Isolation"]
-        RedisQueue[("Redis Queue<br/>queue:build")]
-        Docker["Docker Sandbox<br/>(node:20-alpine)"]
-        RedisPubSub[("Redis Pub/Sub<br/>logs:id")]
-        RedisQueue -->|"3. Pull Task"| Docker
+        RedisStream[("Redis Stream<br/>stream:build")]
+        Docker["Docker Sandbox<br/>(Hardened node:20-alpine)"]
+        RedisPubSub[("Redis Pub/Sub<br/>logs:id & proxy:routes")]
+        RedisStream -->|"3. Consumer Group"| Docker
         Docker -.->|"4. Stream Logs"| RedisPubSub
     end
 
-    subgraph Edge ["03. Edge Network & Storage"]
+    subgraph Edge ["03. Edge Network & In-Memory Routing"]
         Dist[("Build Artifacts<br/>dist/ directory")]
-        GoProxy["Go Reverse Proxy<br/>(Port 8000)"]
+        GoProxy["Go Reverse Proxy<br/>(In-Memory Cache, Port 8000)"]
         App["Live Application<br/>(*.localhost:8000)"]
+        RedisPubSub -.->|"5. Invalidation Event"| GoProxy
         Dist --> GoProxy
         GoProxy --> App
     end
 
-    API -->|"2. Enqueue"| RedisQueue
-    RedisPubSub -.->|"5. WebSocket Stream"| Dash
+    API -->|"2. XADD Stream"| RedisStream
+    RedisPubSub -.->|"WebSocket Stream"| Dash
     Docker -->|"6. Output Dist"| Dist
 ```
 
@@ -95,8 +98,8 @@ stratus-cloud/
 │   └── web/              # Next.js 15 Developer Dashboard with xterm.js
 ├── services/
 │   ├── api/              # REST Orchestrator API & WebSocket Gateway (Node/TS)
-│   ├── builder/          # Docker Sandbox Build Engine (Dockerode)
-│   └── proxy/            # High-Performance Edge Reverse Proxy (Go)
+│   ├── builder/          # Hardened Docker Sandbox Build Engine (Dockerode + Redis Streams)
+│   └── proxy/            # High-Performance In-Memory Edge Reverse Proxy (Go)
 ├── fixtures/
 │   └── demo-app/         # Minimal, zero-bloat test application
 └── assets/               # Architecture diagrams and preview assets
@@ -152,19 +155,24 @@ Open [http://localhost:3000](http://localhost:3000) in your browser, enter any G
 
 | Subsystem | Technology | Architectural Rationale |
 | :--- | :--- | :--- |
-| **Edge Reverse Proxy** | **Go (`net/http`)** | Sub-millisecond latency, ~15MB memory footprint, concurrent Goroutine request dispatching, and zero third-party dependencies (modeled after Traefik/Caddy). Hardened with path traversal guards and production HTTP timeouts. |
-| **Sandbox Execution** | **Docker Engine API (`dockerode`)** | Full container isolation for untrusted user code. Enforces 1GB memory limits, CPU quotas, and ephemeral container cleanup upon build exit. |
-| **Message Broker & Logs** | **Redis (Queue + Pub/Sub)** | Decouples the build worker fleet from the WebSocket gateway. Allows independent horizontal scaling of workers across multiple machines. |
-| **Developer Dashboard** | **Next.js 15 + xterm.js** | Server-side rendering paired with client-side interactive terminal emulator via WebSockets for raw container `stdout`/`stderr` streaming. |
+| **Edge Reverse Proxy** | **Go (`net/http`)** | Sub-millisecond latency, in-memory $O(1)$ lock-free read route cache, pre-warmed connection pools, real-time cache invalidation via Redis Pub/Sub, zero third-party dependencies. Hardened with path traversal guards and production HTTP timeouts. |
+| **Production Aliases** | **SQLite + Dynamic Routing** | Instantaneous zero-downtime blue-green traffic swapping. Maps project slugs (`<slug>.localhost:8000`) atomically to active production deployments. |
+| **Resilient Task Pipeline** | **Redis Streams (`stream:build`)** | Replaced fragile `BLPOP` queues with persistent consumer groups. Guarantees at-least-once execution with `XACK`, automatic orphaned job recovery (`XAUTOCLAIM`), and 15m container execution fencing. |
+| **Sandbox Execution** | **Hardened Docker Engine API** | Complete container isolation for untrusted user code. Enforces 1GB RAM limits, `PidsLimit: 256`, `CapDrop: ['ALL']`, `no-new-privileges: true`, bounded swap, and host credential environment blocklist. |
+| **Message Broker & Logs** | **Redis (Streams + Pub/Sub)** | Decouples the build worker fleet from the WebSocket gateway. Allows independent horizontal scaling of workers across multiple machines. |
+| **Developer Dashboard** | **Next.js 15 + xterm.js** | Server-side rendering paired with client-side interactive terminal emulator via WebSockets for raw container `stdout`/`stderr` streaming and 1-click blue-green promotion. |
 
 ---
 
 ## Security Guardrails
 
-1. **Path Traversal Shield:** The Go Edge Proxy verifies that all requested static assets resolve strictly within the deployment's `dist/` directory via `filepath.Rel()`. Any attempt to escape the directory is denied with HTTP 403.
-2. **Subdomain Strict Regex:** Subdomains are sanitized with `^[a-zA-Z0-9_-]+$` preventing injection of directory traversal separators in the `Host` header.
-3. **Slowloris & Timeout Protection:** The HTTP server configures strict `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` bounds to mitigate socket exhaustion attacks.
-4. **Sandboxed Build Isolation:** User-submitted repositories never execute on the host machine. All `npm install` and build scripts run within memory-limited, unprivileged Alpine containers.
+1. **Kernel Privilege & Capability Dropping:** Build and runtime containers drop all root Linux capabilities (`CapDrop: ['ALL']`) with `no-new-privileges: true` set to prevent container escape and privilege escalation.
+2. **Fork-Bomb & Resource Denial Mitigation:** Enforces strict process table quotas (`PidsLimit: 256` for builder containers, `512` for long-lived runtime services), 1.0 CPU quota, 1GB RAM, and 1GB Swap to prevent noisy neighbor starvation.
+3. **Host Credential Leakage Guard:** Dynamic environment sanitizer filters out sensitive system environment variables (`AWS_*`, `TOKEN*`, `SECRET*`, `DOCKER_*`) before injecting user configurations into untrusted containers.
+4. **Execution Timeout Guard:** Ephemeral builder containers are actively monitored with a 15-minute watchdog timer; hung or unresponsive build processes are forcibly aborted and cleaned up.
+5. **Path Traversal Shield:** The Go Edge Proxy verifies that all requested static assets resolve strictly within the deployment's `dist/` directory via `filepath.Rel()`. Any attempt to escape the directory is denied with HTTP 403.
+6. **Subdomain Strict Regex:** Subdomains are sanitized with `^[a-zA-Z0-9_-]+$` preventing injection of directory traversal separators in the `Host` header.
+7. **Slowloris & Timeout Protection:** The HTTP server configures strict `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` bounds to mitigate socket exhaustion attacks.
 
 ---
 
