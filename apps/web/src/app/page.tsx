@@ -96,6 +96,30 @@ export default function Home() {
     }
   };
 
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDelete = async (deploymentId: string) => {
+    if (!confirm(`Are you sure you want to teardown and permanently delete deployment "${deploymentId}"? This will stop its container, remove artifacts, and purge logs.`)) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to delete deployment");
+      }
+      setActiveDeploymentId(null);
+      await fetchDeployments();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error deleting deployment");
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
   const handleRollback = async (deploymentId: string) => {
     if (!confirm("Are you sure you want to rollback production traffic to the previous deployment?")) {
       return;
@@ -629,6 +653,18 @@ export default function Home() {
                       <span className="text-xs text-zinc-500 font-mono">
                         Compiling in Docker Sandbox...
                       </span>
+                    )}
+
+                    {!activeDeployment.is_production && (
+                      <button
+                        type="button"
+                        onClick={() => handleDelete(activeDeployment.id)}
+                        disabled={isDeleting}
+                        className="inline-flex items-center justify-center p-2 rounded-lg bg-zinc-900 hover:bg-rose-950/40 text-zinc-400 hover:text-rose-400 border border-zinc-800 hover:border-rose-500/30 transition-colors disabled:opacity-50 cursor-pointer"
+                        title="Teardown container, remove disk artifacts, and purge deployment"
+                      >
+                        {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
+                      </button>
                     )}
                   </div>
                 </div>

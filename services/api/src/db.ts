@@ -307,5 +307,27 @@ export const dbService = {
         return db.prepare(`
             SELECT * FROM deployment_logs WHERE deployment_id = ? ORDER BY id ASC
         `).all(id) as LogRecord[];
+    },
+
+    deleteDeployment(id: string): { success: boolean; error?: string } {
+        const deployment = db.prepare('SELECT * FROM deployments WHERE id = ?').get(id) as DeploymentRecord | undefined;
+        if (!deployment) {
+            return { success: false, error: 'Deployment not found' };
+        }
+
+        if (deployment.project_id) {
+            const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(deployment.project_id) as ProjectRecord | undefined;
+            if (project && project.production_deployment_id === id) {
+                return { 
+                    success: false, 
+                    error: `Cannot delete deployment ${id} because it is currently the active production deployment for project "${project.name}". Promote another deployment or rollback before deleting.` 
+                };
+            }
+        }
+
+        db.prepare('DELETE FROM deployment_logs WHERE deployment_id = ?').run(id);
+        db.prepare('DELETE FROM deployments WHERE id = ?').run(id);
+
+        return { success: true };
     }
 };
