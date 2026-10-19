@@ -221,13 +221,26 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = hostCodeDir.replace(/\\/g, '/');
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
+    const SYSTEM_ENV_BLOCKLIST = new Set([
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'DOCKER_HOST',
+        'DOCKER_CERT_PATH',
+        'DOCKER_TLS_VERIFY',
+        'DATABASE_URL',
+        'REDIS_PASSWORD',
+        'GITHUB_TOKEN',
+        'GITHUB_WEBHOOK_SECRET',
+        'STRATUS_WORKSPACE_HOST_PATH',
+    ]);
+
     // Format custom environment variables for Docker container
     const formattedEnv: string[] = [];
     const secretValues: string[] = [];
     if (options.env && typeof options.env === 'object') {
         for (const [key, value] of Object.entries(options.env)) {
-            // Security: Sanitize key to allow only valid environment variable names
-            if (/^[A-Za-z0-9_]+$/.test(key) && typeof value === 'string') {
+            // Security: Sanitize key to allow only valid variable names and prevent host secret leakage
+            if (/^[A-Za-z0-9_]+$/.test(key) && typeof value === 'string' && !SYSTEM_ENV_BLOCKLIST.has(key)) {
                 formattedEnv.push(`${key}=${value}`);
                 if (value.length > 0) secretValues.push(value);
             }
@@ -248,7 +261,12 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             HostConfig: {
                 Binds: [`${hostMountPath}:/app`],
                 Memory: 1024 * 1024 * 1024, // 1GB memory limit
+                MemorySwap: 1024 * 1024 * 1024, // Disallow unbounded swap
                 CpuQuota: 100000,          // 1.0 CPU core limit
+                PidsLimit: 256,            // Fork bomb defense
+                SecurityOpt: ['no-new-privileges:true'], // Prevent privilege escalation
+                CapDrop: ['ALL'],          // Drop all root Linux capabilities
+                CapAdd: ['CHOWN', 'SETUID', 'SETGID', 'DAC_OVERRIDE'], // Whitelist for package manager permissions
             },
             Tty: true,
         });
@@ -399,7 +417,10 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
                         '3000/tcp': [{ HostPort: String(allocatedPort), HostIp: '0.0.0.0' }],
                     },
                     Memory: 1024 * 1024 * 1024,
+                    MemorySwap: 1024 * 1024 * 1024,
                     CpuQuota: 100000,
+                    PidsLimit: 512,
+                    SecurityOpt: ['no-new-privileges:true'],
                     RestartPolicy: { Name: 'unless-stopped' },
                 },
                 Tty: true,
