@@ -69,10 +69,15 @@ services:
     environment:
       PORT: "8000"
       WORKSPACE_DIR: /workspace
+      REDIS_HOST: redis
+      REDIS_PORT: "6379"
       # ตั้งค่าเพื่อเปิด HTTPS อัตโนมัติ (Let's Encrypt). ปล่อยว่างเพื่อใช้ HTTP บน 8000 แบบเดิม
       BASE_DOMAIN: ${BASE_DOMAIN:-}
       TLS_DOMAINS: ${TLS_DOMAINS:-}
       ACME_EMAIL: ${ACME_EMAIL:-}
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace:ro
       - certs:/certs
