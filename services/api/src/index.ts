@@ -5,13 +5,50 @@ import { WebSocketServer, WebSocket } from 'ws';
 import Redis from 'ioredis';
 import url from 'url';
 import crypto from 'crypto';
+import path from 'path';
+import fs from 'fs';
 import { githubWebhookHandler } from './github';
-import { initDatabase, dbService } from './db';
+import { initDatabase, dbService, DeploymentRecord } from './db';
 
 const app = express();
 
 // Initialize SQLite database
 initDatabase();
+
+const WORKSPACE_DIR = process.env.WORKSPACE_DIR 
+    ? path.resolve(process.env.WORKSPACE_DIR)
+    : path.resolve(__dirname, '../../builder/workspace');
+
+// Sync production domain alias to Go Reverse Proxy (both via Redis and alias.json)
+async function syncProductionRoute(slug: string, deployment: DeploymentRecord) {
+    // 1. Write alias.json to workspace for cold-start proxy discovery
+    try {
+        const aliasDir = path.join(WORKSPACE_DIR, slug);
+        fs.mkdirSync(aliasDir, { recursive: true });
+        fs.writeFileSync(path.join(aliasDir, 'alias.json'), JSON.stringify({
+            target: deployment.id,
+            type: deployment.runtime_type || 'static',
+            port: deployment.container_port || null,
+            updatedAt: Date.now()
+        }, null, 2));
+    } catch (fsErr) {
+        console.error(`[FS] Error writing alias.json for ${slug}:`, fsErr);
+    }
+
+    // 2. Publish to Redis proxy:routes channel for zero-downtime hot-swap
+    try {
+        await redisPublisher.publish('proxy:routes', JSON.stringify({
+            action: 'set',
+            subdomain: slug,
+            type: deployment.runtime_type || 'static',
+            port: deployment.container_port || null,
+            aliasOf: deployment.id,
+        }));
+        console.log(`[ROUTE] Promoted ${deployment.id} to production alias "${slug}"`);
+    } catch (redisErr) {
+        console.error(`[REDIS] Error publishing route promotion for ${slug}:`, redisErr);
+    }
+}
 
 // รหัส Deployment แบบสุ่ม (กันชนกันของ Date.now().slice ที่ใช้เดิม)
 function newDeploymentId(): string {
@@ -96,6 +133,17 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
 
         if (message.includes('[STATUS] READY')) {
             dbService.updateDeploymentStatus(deploymentId, 'READY');
+            // Auto-promote to production domain alias if this project has no active production deployment yet
+            try {
+                const project = dbService.getProjectByDeployment(deploymentId);
+                const dep = dbService.getDeployment(deploymentId);
+                if (project && !project.production_deployment_id && dep) {
+                    dbService.setProjectProductionDeployment(project.id, deploymentId);
+                    syncProductionRoute(project.slug, dep);
+                }
+            } catch (autoPromoteErr) {
+                console.error(`[AUTO-PROMOTE] Error auto-promoting ${deploymentId}:`, autoPromoteErr);
+            }
         } else if (message.includes('[STATUS] FAILED')) {
             dbService.updateDeploymentStatus(deploymentId, 'FAILED', message);
         } else if (message.includes('Initializing build environment')) {
@@ -178,11 +226,70 @@ app.get('/api/health', (req: Request, res: Response) => {
     res.json({ status: 'ok', service: 'stratus-api', timestamp: new Date().toISOString() });
 });
 
-// ดึงรายการประวัติการ Deploy ทั้งหมด (รองรับ Pagination)
+// ดึงรายการประวัติการ Deploy ทั้งหมด (รองรับ Pagination) พร้อมข้อมูล Production Status
 app.get('/api/deployments', (req: Request, res: Response) => {
     const limit = Number(req.query.limit) || 50;
     const deployments = dbService.getDeployments(limit);
-    res.json({ deployments });
+    const projects = dbService.getAllProjects();
+    const projectMap = new Map(projects.map(p => [p.id, p]));
+
+    const enriched = deployments.map(d => {
+        const proj = d.project_id ? projectMap.get(d.project_id) : undefined;
+        return {
+            ...d,
+            project_slug: proj?.slug || null,
+            is_production: proj ? proj.production_deployment_id === d.id : false,
+            production_url: proj?.slug ? `http://${proj.slug}.localhost:8000` : null,
+        };
+    });
+
+    res.json({ deployments: enriched });
+});
+
+// ดึงรายการ Projects ทั้งหมด
+app.get('/api/projects', (req: Request, res: Response) => {
+    const projects = dbService.getAllProjects();
+    res.json({ projects });
+});
+
+// Promote Deployment สู่ Production Domain Alias (Zero-Downtime Hot Swap)
+app.post('/api/deployments/:id/promote', async (req: Request, res: Response) => {
+    const deploymentId = req.params.id as string;
+    const deployment = dbService.getDeployment(deploymentId);
+    if (!deployment) {
+        res.status(404).json({ error: 'Deployment not found' });
+        return;
+    }
+
+    if (deployment.status !== 'READY') {
+        res.status(400).json({ 
+            error: `Cannot promote deployment with status: ${deployment.status}. Only READY deployments can be promoted.` 
+        });
+        return;
+    }
+
+    const project = dbService.getProjectByDeployment(deploymentId);
+    if (!project) {
+        res.status(404).json({ error: 'Associated project not found' });
+        return;
+    }
+
+    dbService.setProjectProductionDeployment(project.id, deploymentId);
+    await syncProductionRoute(project.slug, deployment);
+
+    const productionUrl = `http://${project.slug}.localhost:8000`;
+    res.json({
+        success: true,
+        message: `Deployment ${deploymentId} promoted to production`,
+        projectId: project.id,
+        projectSlug: project.slug,
+        productionUrl,
+        deployment: {
+            ...deployment,
+            is_production: true,
+            production_url: productionUrl,
+        },
+    });
 });
 
 // ดึงรายละเอียด Deployment เดี่ยว
