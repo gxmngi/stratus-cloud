@@ -9,6 +9,7 @@ import path from 'path';
 import fs from 'fs';
 import { githubWebhookHandler } from './github';
 import { initDatabase, dbService, DeploymentRecord } from './db';
+import { getDeploymentMetrics } from './telemetry';
 
 const app = express();
 
@@ -383,6 +384,22 @@ app.get('/api/deployments/:id', (req: Request, res: Response) => {
 app.get('/api/deployments/:id/logs', (req: Request, res: Response) => {
     const logs = dbService.getDeploymentLogs(req.params.id as string);
     res.json({ logs: logs.map(l => l.message) });
+});
+
+// ดึงข้อมูล Real-time Container Telemetry & Metrics (CPU, Memory, PIDs, Network I/O)
+app.get('/api/deployments/:id/stats', async (req: Request, res: Response) => {
+    const deploymentId = req.params.id as string;
+    const deployment = dbService.getDeployment(deploymentId);
+    if (!deployment) {
+        res.status(404).json({ error: 'Deployment not found' });
+        return;
+    }
+
+    const metrics = await getDeploymentMetrics(
+        deployment.id, 
+        (deployment.runtime_type || 'static') as 'static' | 'dynamic'
+    );
+    res.json({ metrics });
 });
 
 // Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว พร้อมบันทึกลง SQLite

@@ -13,12 +13,14 @@
     "@types/better-sqlite3": "^9.6.0",
     "better-sqlite3": "^13.0.3",
     "cors": "^2.8.6",
+    "dockerode": "^5.0.1",
     "express": "^5.2.1",
     "ioredis": "^6.0.0",
     "ws": "^8.21.3"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
+    "@types/dockerode": "^4.0.2",
     "@types/express": "^5.0.6",
     "@types/node": "^26.5.0",
     "@types/ws": "^8.18.1",

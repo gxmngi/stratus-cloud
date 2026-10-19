@@ -16,13 +16,34 @@ import {
   Clock,
   History,
   RotateCw,
-  RotateCcw
+  RotateCcw,
+  Cpu,
+  HardDrive,
+  Activity,
+  Wifi
 } from "lucide-react";
 
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
 const Terminal = dynamic(() => import("@/components/Terminal"), { ssr: false });
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
+
+interface ContainerMetrics {
+  deploymentId: string;
+  containerId?: string;
+  runtimeType: "dynamic" | "static";
+  status: "running" | "exited" | "static" | "notFound";
+  cpuPercent: number;
+  memoryUsageBytes: number;
+  memoryLimitBytes: number;
+  memoryPercent: number;
+  pidsCurrent: number;
+  pidsLimit: number;
+  networkRxBytes: number;
+  networkTxBytes: number;
+  startedAt?: string;
+  uptimeSeconds?: number;
+}
 
 interface DeploymentItem {
   id: string;
@@ -49,6 +70,7 @@ export default function Home() {
   const [isPromoting, setIsPromoting] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<ContainerMetrics | null>(null);
   const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [showEnv, setShowEnv] = useState(false);
@@ -192,6 +214,50 @@ export default function Home() {
     } finally {
       setIsDeploying(false);
     }
+  };
+
+  // Poll container metrics when active deployment is selected
+  useEffect(() => {
+    if (!activeDeploymentId) {
+      setMetrics(null);
+      return;
+    }
+
+    let isMounted = true;
+    const fetchMetrics = async () => {
+      try {
+        const res = await fetch(`${API_URL}/api/deployments/${activeDeploymentId}/stats`);
+        if (res.ok && isMounted) {
+          const data = await res.json();
+          setMetrics(data.metrics);
+        }
+      } catch {}
+    };
+
+    fetchMetrics();
+    const interval = setInterval(fetchMetrics, 3000);
+    return () => {
+      isMounted = false;
+      clearInterval(interval);
+    };
+  }, [activeDeploymentId]);
+
+  const formatBytes = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return "0 B";
+    const k = 1024;
+    const sizes = ["B", "KB", "MB", "GB"];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`;
+  };
+
+  const formatUptime = (sec?: number) => {
+    if (!sec || sec <= 0) return "0s";
+    const m = Math.floor(sec / 60);
+    const s = sec % 60;
+    const h = Math.floor(m / 60);
+    if (h > 0) return `${h}h ${m % 60}m`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
   };
 
   const formatDuration = (ms?: number | null) => {
@@ -566,6 +632,49 @@ export default function Home() {
                     )}
                   </div>
                 </div>
+
+                {/* Real-time Container Telemetry Card */}
+                {metrics && metrics.status === "running" && (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-xl border border-zinc-800 bg-zinc-950/80 font-mono text-xs">
+                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
+                      <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div>
+                        <div className="text-[10px] uppercase text-zinc-500">CPU Load</div>
+                        <div className="font-semibold text-zinc-200 tabular-nums">{metrics.cpuPercent}%</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
+                      <HardDrive className="w-4 h-4 text-purple-400 shrink-0" />
+                      <div>
+                        <div className="text-[10px] uppercase text-zinc-500">Memory ({metrics.memoryPercent}%)</div>
+                        <div className="font-semibold text-zinc-200 tabular-nums">{formatBytes(metrics.memoryUsageBytes)}</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
+                      <Activity className="w-4 h-4 text-blue-400 shrink-0" />
+                      <div>
+                        <div className="text-[10px] uppercase text-zinc-500">Processes</div>
+                        <div className="font-semibold text-zinc-200 tabular-nums">{metrics.pidsCurrent} / {metrics.pidsLimit} PIDs</div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
+                      <Wifi className="w-4 h-4 text-amber-400 shrink-0" />
+                      <div>
+                        <div className="text-[10px] uppercase text-zinc-500">Uptime / Net I/O</div>
+                        <div className="font-semibold text-zinc-200 tabular-nums">{formatUptime(metrics.uptimeSeconds)} • ↓{formatBytes(metrics.networkRxBytes)}</div>
+                      </div>
+                    </div>
+                  </div>
+                )}
+                {metrics && metrics.status === "static" && (
+                  <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 text-xs font-mono text-zinc-400">
+                    <span className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
+                      Static Asset Edge Host
+                    </span>
+                    <span className="text-zinc-500">Zero Idle Memory & CPU Footprint</span>
+                  </div>
+                )}
 
                 {/* xterm.js Terminal with Persisted History Replay */}
                 <Terminal
