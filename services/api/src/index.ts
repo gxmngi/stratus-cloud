@@ -349,8 +349,10 @@ app.post('/api/deploy', async (req: Request, res: Response) => {
             env: envResult.value,
         };
 
-        // ส่ง Job เข้า Redis Queue: "queue:build"
-        await redisPublisher.rpush('queue:build', JSON.stringify(jobPayload));
+        // ส่ง Job เข้า Redis Stream "stream:build" เพื่อความเสถียร (At-least-once delivery)
+        const jobJson = JSON.stringify(jobPayload);
+        await redisPublisher.xadd('stream:build', '*', 'job', jobJson);
+        await redisPublisher.rpush('queue:build', jobJson);
 
         // ตอบกลับผู้ใช้ทันที (Non-blocking / Asynchronous Response)
         res.status(202).json({

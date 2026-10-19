@@ -112,7 +112,9 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
             pusher,
         };
 
-        await publisher.rpush('queue:build', JSON.stringify(job));
+        const jobJson = JSON.stringify(job);
+        await publisher.xadd('stream:build', '*', 'job', jobJson);
+        await publisher.rpush('queue:build', jobJson);
         console.log(`[GITHUB] Queued ${deploymentId} from ${repoFullName}@${sha.slice(0, 7)} by ${pusher}`);
 
         res.status(202).json({ deploymentId, status: 'QUEUED' });
