@@ -235,11 +235,14 @@ app.get('/api/deployments', (req: Request, res: Response) => {
 
     const enriched = deployments.map(d => {
         const proj = d.project_id ? projectMap.get(d.project_id) : undefined;
+        const isProd = proj ? proj.production_deployment_id === d.id : false;
         return {
             ...d,
             project_slug: proj?.slug || null,
-            is_production: proj ? proj.production_deployment_id === d.id : false,
+            is_production: isProd,
             production_url: proj?.slug ? `http://${proj.slug}.localhost:8000` : null,
+            can_rollback: isProd ? Boolean(proj?.previous_production_deployment_id) : false,
+            previous_production_deployment_id: proj?.previous_production_deployment_id || null,
         };
     });
 
@@ -286,6 +289,80 @@ app.post('/api/deployments/:id/promote', async (req: Request, res: Response) => 
         productionUrl,
         deployment: {
             ...deployment,
+            is_production: true,
+            production_url: productionUrl,
+        },
+    });
+});
+
+// Rollback Production Deployment ไปยัง Version ก่อนหน้า (Zero-Downtime Auto/Manual Rollback)
+app.post('/api/projects/:id/rollback', async (req: Request, res: Response) => {
+    const projectId = req.params.id as string;
+    const project = dbService.getProject(projectId);
+    if (!project) {
+        res.status(404).json({ error: 'Project not found' });
+        return;
+    }
+
+    const result = dbService.rollbackProjectProductionDeployment(projectId);
+    if (!result.success || !result.restoredDeployment) {
+        res.status(400).json({ error: result.error || 'Rollback failed' });
+        return;
+    }
+
+    await syncProductionRoute(project.slug, result.restoredDeployment);
+    const rollbackMsg = `[ROLLBACK] Production traffic rolled back to deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
+    dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
+    console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
+
+    const productionUrl = `http://${project.slug}.localhost:8000`;
+    res.json({
+        success: true,
+        message: rollbackMsg,
+        projectId: project.id,
+        projectSlug: project.slug,
+        restoredDeploymentId: result.restoredDeployment.id,
+        previousDeploymentId: result.previousDeploymentId,
+        productionUrl,
+        deployment: {
+            ...result.restoredDeployment,
+            is_production: true,
+            production_url: productionUrl,
+        },
+    });
+});
+
+// Rollback helper by deployment ID
+app.post('/api/deployments/:id/rollback', async (req: Request, res: Response) => {
+    const deploymentId = req.params.id as string;
+    const project = dbService.getProjectByDeployment(deploymentId);
+    if (!project) {
+        res.status(404).json({ error: 'Associated project not found' });
+        return;
+    }
+
+    const result = dbService.rollbackProjectProductionDeployment(project.id);
+    if (!result.success || !result.restoredDeployment) {
+        res.status(400).json({ error: result.error || 'Rollback failed' });
+        return;
+    }
+
+    await syncProductionRoute(project.slug, result.restoredDeployment);
+    const rollbackMsg = `[ROLLBACK] Production traffic rolled back to deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
+    dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
+    console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
+
+    const productionUrl = `http://${project.slug}.localhost:8000`;
+    res.json({
+        success: true,
+        message: rollbackMsg,
+        projectId: project.id,
+        projectSlug: project.slug,
+        restoredDeploymentId: result.restoredDeployment.id,
+        previousDeploymentId: result.previousDeploymentId,
+        productionUrl,
+        deployment: {
+            ...result.restoredDeployment,
             is_production: true,
             production_url: productionUrl,
         },
