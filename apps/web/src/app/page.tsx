@@ -26,6 +26,9 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 interface DeploymentItem {
   id: string;
   project_id?: string | null;
+  project_slug?: string | null;
+  is_production?: boolean;
+  production_url?: string | null;
   git_url: string;
   status: "QUEUED" | "BUILDING" | "READY" | "FAILED";
   live_url: string;
@@ -40,6 +43,7 @@ interface DeploymentItem {
 export default function Home() {
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
+  const [isPromoting, setIsPromoting] = useState(false);
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
   const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -47,6 +51,24 @@ export default function Home() {
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([
     { key: "", value: "" },
   ]);
+
+  const handlePromote = async (deploymentId: string) => {
+    setIsPromoting(true);
+    try {
+      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/promote`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to promote deployment");
+      }
+      await fetchDeployments();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error promoting deployment");
+    } finally {
+      setIsPromoting(false);
+    }
+  };
 
   const fetchDeployments = useCallback(async () => {
     try {
@@ -363,6 +385,11 @@ export default function Home() {
                           {dep.id}
                         </span>
                         <div className="flex items-center gap-1">
+                          {dep.is_production && (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                              ★ PROD
+                            </span>
+                          )}
                           {dep.runtime_type === "dynamic" && (
                             <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
                               ⚡ SERVER
@@ -421,10 +448,15 @@ export default function Home() {
                       <Layers className="w-5 h-5 text-zinc-300" />
                     </div>
                     <div>
-                      <div className="flex items-center gap-2.5">
+                      <div className="flex flex-wrap items-center gap-2.5">
                         <h3 className="font-mono text-sm font-semibold text-white">
                           {activeDeployment.id}
                         </h3>
+                        {activeDeployment.is_production && (
+                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/30">
+                            ★ PRODUCTION
+                          </span>
+                        )}
                         {activeDeployment.runtime_type === "dynamic" && (
                           <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20">
                             ⚡ DYNAMIC CONTAINER
@@ -451,13 +483,29 @@ export default function Home() {
                           </span>
                         )}
                       </div>
-                      <p className="text-xs text-zinc-400 mt-1 font-mono">
-                        Subdomain: {activeDeployment.id}.localhost:8000
-                      </p>
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 mt-1 font-mono">
+                        <span>Preview: <code>{activeDeployment.id}.localhost:8000</code></span>
+                        {activeDeployment.production_url && (
+                          <span className="text-amber-300/90">
+                            • Production: <a href={activeDeployment.production_url} target="_blank" rel="noreferrer" className="underline hover:text-amber-200">{activeDeployment.project_slug}.localhost:8000</a>
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
-                  <div>
+                  <div className="flex items-center gap-2.5">
+                    {activeDeployment.status === "READY" && !activeDeployment.is_production && (
+                      <button
+                        type="button"
+                        onClick={() => handlePromote(activeDeployment.id)}
+                        disabled={isPromoting}
+                        className="inline-flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-amber-500/30 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
+                        title="Promote this deployment to the project's production domain"
+                      >
+                        {isPromoting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>★ PROMOTE TO PROD</span>}
+                      </button>
+                    )}
                     {activeDeployment.status === "READY" ? (
                       <a
                         href={activeDeployment.live_url}
@@ -465,7 +513,7 @@ export default function Home() {
                         rel="noreferrer"
                         className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors"
                       >
-                        <span>VISIT LIVE APP</span>
+                        <span>VISIT PREVIEW</span>
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
                     ) : (

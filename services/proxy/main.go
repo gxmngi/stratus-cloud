@@ -106,6 +106,7 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 		Subdomain string `json:"subdomain"`
 		Type      string `json:"type"` // "dynamic", "static"
 		Port      int    `json:"port,omitempty"`
+		AliasOf   string `json:"aliasOf,omitempty"`
 	}
 
 	ch := pubsub.Channel()
@@ -120,10 +121,14 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 		case "set":
 			if rMsg.Type == string(RouteTypeDynamic) && rMsg.Port > 0 {
 				p.SetDynamicRoute(rMsg.Subdomain, rMsg.Port)
-				log.Printf("[ROUTER] In-memory route registered: %s -> dynamic port %d", rMsg.Subdomain, rMsg.Port)
+				log.Printf("[ROUTER] In-memory route registered: %s -> dynamic port %d (aliasOf: %s)", rMsg.Subdomain, rMsg.Port, rMsg.AliasOf)
 			} else if rMsg.Type == string(RouteTypeStatic) {
-				p.SetStaticRoute(rMsg.Subdomain)
-				log.Printf("[ROUTER] In-memory route registered: %s -> static files", rMsg.Subdomain)
+				if rMsg.AliasOf != "" {
+					p.SetStaticRouteFromTarget(rMsg.Subdomain, rMsg.AliasOf)
+				} else {
+					p.SetStaticRoute(rMsg.Subdomain)
+				}
+				log.Printf("[ROUTER] In-memory route registered: %s -> static files (aliasOf: %s)", rMsg.Subdomain, rMsg.AliasOf)
 			}
 		case "delete":
 			p.DeleteRoute(rMsg.Subdomain)
@@ -212,6 +217,37 @@ func (p *ProxyHandler) SetStaticRoute(subdomain string) *RouteEntry {
 	return entry
 }
 
+// SetStaticRouteFromTarget ลงทะเบียน Static Build Directory ของ Target Deployment ให้กับ Subdomain Alias
+func (p *ProxyHandler) SetStaticRouteFromTarget(subdomain string, targetSubdomain string) *RouteEntry {
+	candidates := []string{"dist", "build", "out"}
+	var deploymentDistDir string
+
+	for _, candidate := range candidates {
+		candidatePath := filepath.Join(p.workspaceBase, targetSubdomain, "code", candidate)
+		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
+			deploymentDistDir = candidatePath
+			break
+		}
+	}
+
+	if deploymentDistDir == "" {
+		return nil
+	}
+
+	entry := &RouteEntry{
+		Subdomain: subdomain,
+		Type:      RouteTypeStatic,
+		DistDir:   deploymentDistDir,
+		UpdatedAt: time.Now(),
+	}
+
+	p.routeMu.Lock()
+	p.routes[subdomain] = entry
+	p.routeMu.Unlock()
+
+	return entry
+}
+
 // DeleteRoute ลบ Route ออกจาก Memory
 func (p *ProxyHandler) DeleteRoute(subdomain string) {
 	p.routeMu.Lock()
@@ -236,6 +272,71 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 	// Double-check under lock
 	if entry, exists = p.routes[subdomain]; exists {
 		return entry
+	}
+
+	// 0. ตรวจสอบ alias.json สำหรับ Project Production Domain Alias (e.g. demo-app -> dep-xxxx)
+	aliasFile := filepath.Join(p.workspaceBase, subdomain, "alias.json")
+	if data, err := os.ReadFile(aliasFile); err == nil {
+		var aliasMeta struct {
+			Target string `json:"target"`
+			Type   string `json:"type"`
+			Port   int    `json:"port"`
+		}
+		if err := json.Unmarshal(data, &aliasMeta); err == nil {
+			if aliasMeta.Type == "dynamic" && aliasMeta.Port > 0 {
+				targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", aliasMeta.Port))
+				if err == nil {
+					transport := &http.Transport{
+						Proxy: http.ProxyFromEnvironment,
+						DialContext: (&net.Dialer{
+							Timeout:   5 * time.Second,
+							KeepAlive: 30 * time.Second,
+						}).DialContext,
+						MaxIdleConns:        100,
+						MaxIdleConnsPerHost: 20,
+						IdleConnTimeout:     90 * time.Second,
+					}
+					proxy := httputil.NewSingleHostReverseProxy(targetURL)
+					proxy.Transport = transport
+					proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
+						log.Printf("[PROXY] Error proxying to alias container port %d: %v", aliasMeta.Port, proxyErr)
+						http.Error(rw, fmt.Sprintf("502 Bad Gateway: Application container on port %d unreachable", aliasMeta.Port), http.StatusBadGateway)
+					}
+					origDirector := proxy.Director
+					proxy.Director = func(req *http.Request) {
+						origDirector(req)
+						req.Header.Set("X-Forwarded-Host", req.Host)
+						req.Header.Set("X-Forwarded-Proto", "http")
+					}
+
+					entry = &RouteEntry{
+						Subdomain:    subdomain,
+						Type:         RouteTypeDynamic,
+						Port:         aliasMeta.Port,
+						UpstreamURL:  targetURL,
+						ReverseProxy: proxy,
+						UpdatedAt:    time.Now(),
+					}
+					p.routes[subdomain] = entry
+					return entry
+				}
+			} else if aliasMeta.Type == "static" && aliasMeta.Target != "" {
+				candidates := []string{"dist", "build", "out"}
+				for _, candidate := range candidates {
+					candidatePath := filepath.Join(p.workspaceBase, aliasMeta.Target, "code", candidate)
+					if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
+						entry = &RouteEntry{
+							Subdomain: subdomain,
+							Type:      RouteTypeStatic,
+							DistDir:   candidatePath,
+							UpdatedAt: time.Now(),
+						}
+						p.routes[subdomain] = entry
+						return entry
+					}
+				}
+			}
+		}
 	}
 
 	// 1. ตรวจสอบ runtime.json สำหรับ Dynamic Container
@@ -361,6 +462,7 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 			Subdomain string `json:"subdomain"`
 			Type      string `json:"type"`
 			Port      int    `json:"port"`
+			AliasOf   string `json:"aliasOf"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, `{"error":"Invalid JSON payload"}`, http.StatusBadRequest)
@@ -376,7 +478,12 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(entry)
 		} else if req.Type == string(RouteTypeStatic) {
-			entry := p.SetStaticRoute(req.Subdomain)
+			var entry *RouteEntry
+			if req.AliasOf != "" {
+				entry = p.SetStaticRouteFromTarget(req.Subdomain, req.AliasOf)
+			} else {
+				entry = p.SetStaticRoute(req.Subdomain)
+			}
 			if entry == nil {
 				http.Error(w, `{"error":"Static dist directory not found on disk"}`, http.StatusNotFound)
 				return

@@ -261,3 +261,76 @@ func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
 		t.Fatalf("expected 404 after route deletion, got %d", appRec2.Code)
 	}
 }
+
+func TestProjectDomainAliasPromotion(t *testing.T) {
+	tempDir := t.TempDir()
+
+	// Setup deployment v1
+	v1Dir := filepath.Join(tempDir, "dep-v1", "code", "dist")
+	if err := os.MkdirAll(v1Dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(v1Dir, "index.html"), []byte("<h1>App Version 1</h1>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Setup deployment v2
+	v2Dir := filepath.Join(tempDir, "dep-v2", "code", "dist")
+	if err := os.MkdirAll(v2Dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(v2Dir, "index.html"), []byte("<h1>App Version 2</h1>"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &ProxyHandler{workspaceBase: tempDir, routes: make(map[string]*RouteEntry)}
+
+	// 1. Promote v1 to production alias "my-blog"
+	entry := p.SetStaticRouteFromTarget("my-blog", "dep-v1")
+	if entry == nil {
+		t.Fatal("expected non-nil entry from SetStaticRouteFromTarget")
+	}
+
+	req1 := httptest.NewRequest("GET", "/", nil)
+	req1.Host = "my-blog.localhost:8000"
+	rec1 := httptest.NewRecorder()
+	p.ServeHTTP(rec1, req1)
+
+	if rec1.Code != http.StatusOK || !strings.Contains(rec1.Body.String(), "App Version 1") {
+		t.Fatalf("expected Version 1, got status %d body %s", rec1.Code, rec1.Body.String())
+	}
+
+	// 2. Zero-downtime hot-swap: Promote v2 to production alias "my-blog"
+	entry2 := p.SetStaticRouteFromTarget("my-blog", "dep-v2")
+	if entry2 == nil {
+		t.Fatal("expected non-nil entry2 from SetStaticRouteFromTarget")
+	}
+
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.Host = "my-blog.localhost:8000"
+	rec2 := httptest.NewRecorder()
+	p.ServeHTTP(rec2, req2)
+
+	if rec2.Code != http.StatusOK || !strings.Contains(rec2.Body.String(), "App Version 2") {
+		t.Fatalf("expected Version 2 after promotion, got status %d body %s", rec2.Code, rec2.Body.String())
+	}
+
+	// 3. Cold-start discovery via alias.json
+	p2 := &ProxyHandler{workspaceBase: tempDir, routes: make(map[string]*RouteEntry)}
+	aliasDir := filepath.Join(tempDir, "cold-alias")
+	if err := os.MkdirAll(aliasDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(aliasDir, "alias.json"), []byte(`{"target":"dep-v2","type":"static"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	reqCold := httptest.NewRequest("GET", "/", nil)
+	reqCold.Host = "cold-alias.localhost:8000"
+	recCold := httptest.NewRecorder()
+	p2.ServeHTTP(recCold, reqCold)
+
+	if recCold.Code != http.StatusOK || !strings.Contains(recCold.Body.String(), "App Version 2") {
+		t.Fatalf("expected Version 2 from cold alias.json, got status %d body %s", recCold.Code, recCold.Body.String())
+	}
+}

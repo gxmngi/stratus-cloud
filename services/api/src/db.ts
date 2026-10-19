@@ -23,7 +23,9 @@ export function initDatabase() {
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
+            slug TEXT UNIQUE,
             git_url TEXT NOT NULL UNIQUE,
+            production_deployment_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -62,6 +64,8 @@ export function initDatabase() {
     `);
 
     // Schema migrations for existing databases
+    try { db.exec('ALTER TABLE projects ADD COLUMN slug TEXT'); } catch {}
+    try { db.exec('ALTER TABLE projects ADD COLUMN production_deployment_id TEXT'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
@@ -71,7 +75,9 @@ export function initDatabase() {
 export interface ProjectRecord {
     id: string;
     name: string;
+    slug: string;
     git_url: string;
+    production_deployment_id?: string | null;
     created_at: number;
     updated_at: number;
 }
@@ -106,21 +112,62 @@ export const dbService = {
     getOrCreateProject(gitUrl: string): ProjectRecord {
         const existing = db.prepare('SELECT * FROM projects WHERE git_url = ?').get(gitUrl) as ProjectRecord | undefined;
         if (existing) {
+            if (!existing.slug) {
+                const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
+                const name = parts[parts.length - 1] || 'unnamed-project';
+                const slug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
+                db.prepare('UPDATE projects SET slug = ? WHERE id = ?').run(slug, existing.id);
+                existing.slug = slug;
+            }
             return existing;
         }
 
-        // Derive name from git URL (e.g. fixtures/demo-app -> demo-app, or github.com/user/repo -> repo)
+        // Derive name and clean slug from git URL
         const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
         const name = parts[parts.length - 1] || 'unnamed-project';
-        const id = `proj-${name.toLowerCase().replace(/[^a-z0-9_-]/g, '-')}-${Date.now().toString(36)}`;
+        const rawSlug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
+        let slug = rawSlug;
+        const conflict = db.prepare('SELECT id FROM projects WHERE slug = ?').get(slug);
+        if (conflict) {
+            slug = `${rawSlug}-${Date.now().toString(36).slice(-4)}`;
+        }
+
+        const id = `proj-${slug}-${Date.now().toString(36)}`;
         const now = Date.now();
 
         db.prepare(`
-            INSERT INTO projects (id, name, git_url, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-        `).run(id, name, gitUrl, now, now);
+            INSERT INTO projects (id, name, slug, git_url, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).run(id, name, slug, gitUrl, now, now);
 
-        return { id, name, git_url: gitUrl, created_at: now, updated_at: now };
+        return { id, name, slug, git_url: gitUrl, created_at: now, updated_at: now };
+    },
+
+    getProject(id: string): ProjectRecord | undefined {
+        return db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as ProjectRecord | undefined;
+    },
+
+    getProjectByDeployment(deploymentId: string): ProjectRecord | undefined {
+        return db.prepare(`
+            SELECT p.* FROM projects p 
+            JOIN deployments d ON d.project_id = p.id 
+            WHERE d.id = ?
+        `).get(deploymentId) as ProjectRecord | undefined;
+    },
+
+    setProjectProductionDeployment(projectId: string, deploymentId: string): void {
+        const now = Date.now();
+        db.prepare(`
+            UPDATE projects 
+            SET production_deployment_id = ?, updated_at = ?
+            WHERE id = ?
+        `).run(deploymentId, now, projectId);
+    },
+
+    getAllProjects(): ProjectRecord[] {
+        return db.prepare(`
+            SELECT * FROM projects ORDER BY updated_at DESC
+        `).all() as ProjectRecord[];
     },
 
     createDeployment(record: Omit<DeploymentRecord, 'duration_ms' | 'completed_at'>): void {
