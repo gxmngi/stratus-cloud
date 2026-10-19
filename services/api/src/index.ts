@@ -10,6 +10,7 @@ import fs from 'fs';
 import { githubWebhookHandler } from './github';
 import { initDatabase, dbService, DeploymentRecord } from './db';
 import { getDeploymentMetrics } from './telemetry';
+import { teardownDeployment } from './teardown';
 
 const app = express();
 
@@ -400,6 +401,22 @@ app.get('/api/deployments/:id/stats', async (req: Request, res: Response) => {
         (deployment.runtime_type || 'static') as 'static' | 'dynamic'
     );
     res.json({ metrics });
+});
+
+// Teardown deployment: stops container, invalidates route, cleans workspace, and deletes DB records
+app.delete('/api/deployments/:id', async (req: Request, res: Response) => {
+    const deploymentId = req.params.id as string;
+    const result = await teardownDeployment(deploymentId, WORKSPACE_DIR, redisPublisher);
+    if (!result.success) {
+        res.status(400).json({ error: result.error || 'Teardown failed' });
+        return;
+    }
+
+    res.json({
+        success: true,
+        message: `Deployment ${deploymentId} torn down successfully`,
+        details: result,
+    });
 });
 
 // Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว พร้อมบันทึกลง SQLite
