@@ -312,6 +312,17 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             JSON.stringify({ type: 'static', updatedAt: Date.now() }, null, 2)
         );
 
+        // Notify Go reverse proxy via Redis Pub/Sub for immediate in-memory route registration
+        try {
+            await redisPublisher.publish('proxy:routes', JSON.stringify({
+                action: 'set',
+                subdomain: deploymentId,
+                type: 'static',
+            }));
+        } catch (pubErr) {
+            console.error('[REDIS] Failed to publish static route to proxy:routes:', pubErr);
+        }
+
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Static build succeeded`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact location: ${detectedDir}`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact contents: [${generatedFiles.slice(0, 8).join(', ')}]`);
@@ -421,6 +432,18 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             await emitLog(deploymentId, `[INFO] [${deploymentId}] Health check passed (HTTP responsive)`);
         } else {
             await emitLog(deploymentId, `[WARN] [${deploymentId}] Container running, waiting for incoming traffic`);
+        }
+
+        // Notify Go reverse proxy via Redis Pub/Sub for immediate in-memory route registration
+        try {
+            await redisPublisher.publish('proxy:routes', JSON.stringify({
+                action: 'set',
+                subdomain: deploymentId,
+                type: 'dynamic',
+                port: allocatedPort,
+            }));
+        } catch (pubErr) {
+            console.error('[REDIS] Failed to publish dynamic route to proxy:routes:', pubErr);
         }
 
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Dynamic container running at http://${deploymentId}.localhost:8000`);
