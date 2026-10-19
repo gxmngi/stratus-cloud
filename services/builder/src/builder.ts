@@ -278,15 +278,41 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         });
     });
 
-    // Step 5: Execute & Await Completion
+    // Step 5: Execute & Await Completion with Timeout Guard
     await container.start();
-    const result = await container.wait();
+
+    const timeoutMs = Number(process.env.BUILD_TIMEOUT_MS) || 15 * 60 * 1000;
+    let timedOut = false;
+    const timeoutTimer = setTimeout(async () => {
+        timedOut = true;
+        await emitLog(deploymentId, `[ERROR] [${deploymentId}] Build execution timed out after ${Math.round(timeoutMs / 1000)}s`);
+        try {
+            await container.kill();
+        } catch {}
+    }, timeoutMs);
+
+    let result: { StatusCode: number };
+    try {
+        result = await container.wait();
+    } finally {
+        clearTimeout(timeoutTimer);
+    }
 
     await emitLog(deploymentId, `[LOGS] [${deploymentId}] --- CONTAINER EXECUTION END ---`);
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Container process exited with code: ${result.StatusCode}`);
 
     // Step 6: Cleanup Container
-    await container.remove();
+    await container.remove().catch(() => {});
+
+    if (timedOut) {
+        await emitLog(deploymentId, `[STATUS] FAILED`);
+        return {
+            success: false,
+            exitCode: 124,
+            artifactPath: null,
+            error: `Build execution timed out after ${Math.round(timeoutMs / 1000)}s`,
+        };
+    }
 
     // Step 7: Detect Runtime Type (Static Site vs Dynamic Container)
     const possibleDirs = customOutputDir 
