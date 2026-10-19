@@ -26,6 +26,7 @@ export function initDatabase() {
             slug TEXT UNIQUE,
             git_url TEXT NOT NULL UNIQUE,
             production_deployment_id TEXT,
+            previous_production_deployment_id TEXT,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
         );
@@ -66,6 +67,7 @@ export function initDatabase() {
     // Schema migrations for existing databases
     try { db.exec('ALTER TABLE projects ADD COLUMN slug TEXT'); } catch {}
     try { db.exec('ALTER TABLE projects ADD COLUMN production_deployment_id TEXT'); } catch {}
+    try { db.exec('ALTER TABLE projects ADD COLUMN previous_production_deployment_id TEXT'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
@@ -78,6 +80,7 @@ export interface ProjectRecord {
     slug: string;
     git_url: string;
     production_deployment_id?: string | null;
+    previous_production_deployment_id?: string | null;
     created_at: number;
     updated_at: number;
 }
@@ -157,11 +160,62 @@ export const dbService = {
 
     setProjectProductionDeployment(projectId: string, deploymentId: string): void {
         const now = Date.now();
+        const current = db.prepare('SELECT production_deployment_id FROM projects WHERE id = ?').get(projectId) as { production_deployment_id?: string | null } | undefined;
+        const previousId = (current && current.production_deployment_id && current.production_deployment_id !== deploymentId)
+            ? current.production_deployment_id
+            : undefined;
+
+        if (previousId) {
+            db.prepare(`
+                UPDATE projects 
+                SET previous_production_deployment_id = ?, production_deployment_id = ?, updated_at = ?
+                WHERE id = ?
+            `).run(previousId, deploymentId, now, projectId);
+        } else {
+            db.prepare(`
+                UPDATE projects 
+                SET production_deployment_id = ?, updated_at = ?
+                WHERE id = ?
+            `).run(deploymentId, now, projectId);
+        }
+    },
+
+    rollbackProjectProductionDeployment(projectId: string): { 
+        success: boolean; 
+        error?: string; 
+        restoredDeployment?: DeploymentRecord; 
+        previousDeploymentId?: string 
+    } {
+        const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as ProjectRecord | undefined;
+        if (!project) {
+            return { success: false, error: 'Project not found' };
+        }
+        if (!project.previous_production_deployment_id) {
+            return { success: false, error: 'No previous production deployment available for rollback' };
+        }
+
+        const restoredDeployment = db.prepare('SELECT * FROM deployments WHERE id = ?').get(project.previous_production_deployment_id) as DeploymentRecord | undefined;
+        if (!restoredDeployment) {
+            return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} not found in database` };
+        }
+        if (restoredDeployment.status !== 'READY') {
+            return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} is in status ${restoredDeployment.status}, cannot rollback` };
+        }
+
+        const now = Date.now();
+        const oldProductionId = project.production_deployment_id || null;
+
         db.prepare(`
             UPDATE projects 
-            SET production_deployment_id = ?, updated_at = ?
+            SET production_deployment_id = ?, previous_production_deployment_id = ?, updated_at = ?
             WHERE id = ?
-        `).run(deploymentId, now, projectId);
+        `).run(restoredDeployment.id, oldProductionId, now, projectId);
+
+        return {
+            success: true,
+            restoredDeployment,
+            previousDeploymentId: oldProductionId || undefined,
+        };
     },
 
     getAllProjects(): ProjectRecord[] {

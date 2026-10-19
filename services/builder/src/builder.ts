@@ -5,6 +5,7 @@ import fs from 'fs';
 import Redis from 'ioredis';
 import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 import { findAvailablePort } from './port-allocator';
+import { waitForContainerReadiness } from './health';
 
 const docker = new Docker();
 
@@ -461,25 +462,31 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             }, null, 2)
         );
 
-        // Health check probe
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Probing container health on port ${allocatedPort}...`);
-        let isHealthy = false;
-        for (let i = 0; i < 20; i++) {
-            await new Promise((resolve) => setTimeout(resolve, 500));
+        // Active readiness health probe
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Initiating active readiness health probe on port ${allocatedPort}...`);
+        const probeResult = await waitForContainerReadiness(runContainer, allocatedPort, {
+            timeoutMs: 15000,
+            intervalMs: 500,
+        });
+
+        if (!probeResult.ready) {
+            await emitLog(deploymentId, `[ERROR] [${deploymentId}] Readiness health check failed: ${probeResult.error}`);
+            // Terminate unhealthy container to avoid leaking resources
             try {
-                const probeRes = await fetch(`http://127.0.0.1:${allocatedPort}/`);
-                if (probeRes.status < 500) {
-                    isHealthy = true;
-                    break;
-                }
+                await runContainer.stop({ t: 2 });
+                await runContainer.remove({ force: true });
             } catch {}
+            await emitLog(deploymentId, `[STATUS] FAILED`);
+            return {
+                success: false,
+                exitCode: 1,
+                artifactPath: null,
+                runtimeType: 'dynamic',
+                error: probeResult.error,
+            };
         }
 
-        if (isHealthy) {
-            await emitLog(deploymentId, `[INFO] [${deploymentId}] Health check passed (HTTP responsive)`);
-        } else {
-            await emitLog(deploymentId, `[WARN] [${deploymentId}] Container running, waiting for incoming traffic`);
-        }
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Readiness health check passed in ${probeResult.latencyMs}ms (HTTP ${probeResult.statusCode ?? 200})`);
 
         // Notify Go reverse proxy via Redis Pub/Sub for immediate in-memory route registration
         try {

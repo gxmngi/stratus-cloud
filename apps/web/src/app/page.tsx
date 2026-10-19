@@ -15,7 +15,8 @@ import {
   Trash2,
   Clock,
   History,
-  RotateCw
+  RotateCw,
+  RotateCcw
 } from "lucide-react";
 
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
@@ -29,6 +30,8 @@ interface DeploymentItem {
   project_slug?: string | null;
   is_production?: boolean;
   production_url?: string | null;
+  can_rollback?: boolean;
+  previous_production_deployment_id?: string | null;
   git_url: string;
   status: "QUEUED" | "BUILDING" | "READY" | "FAILED";
   live_url: string;
@@ -44,6 +47,7 @@ export default function Home() {
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
+  const [isRollingBack, setIsRollingBack] = useState(false);
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
   const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
@@ -67,6 +71,27 @@ export default function Home() {
       alert(err instanceof Error ? err.message : "Error promoting deployment");
     } finally {
       setIsPromoting(false);
+    }
+  };
+
+  const handleRollback = async (deploymentId: string) => {
+    if (!confirm("Are you sure you want to rollback production traffic to the previous deployment?")) {
+      return;
+    }
+    setIsRollingBack(true);
+    try {
+      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/rollback`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to rollback deployment");
+      }
+      await fetchDeployments();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error rolling back deployment");
+    } finally {
+      setIsRollingBack(false);
     }
   };
 
@@ -504,6 +529,24 @@ export default function Home() {
                         title="Promote this deployment to the project's production domain"
                       >
                         {isPromoting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>★ PROMOTE TO PROD</span>}
+                      </button>
+                    )}
+                    {activeDeployment.is_production && activeDeployment.can_rollback && (
+                      <button
+                        type="button"
+                        onClick={() => handleRollback(activeDeployment.id)}
+                        disabled={isRollingBack}
+                        className="inline-flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-rose-300 border border-rose-500/30 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
+                        title={`Rollback production domain to previous deployment (${activeDeployment.previous_production_deployment_id})`}
+                      >
+                        {isRollingBack ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : (
+                          <>
+                            <RotateCcw className="w-3.5 h-3.5" />
+                            <span>ROLLBACK PROD</span>
+                          </>
+                        )}
                       </button>
                     )}
                     {activeDeployment.status === "READY" ? (
