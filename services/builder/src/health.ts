@@ -98,6 +98,7 @@ export async function waitForContainerReadiness(
     const timeoutMs = options.timeoutMs ?? 15000;
     const intervalMs = options.intervalMs ?? 500;
     const start = Date.now();
+    const probeHost = process.env.PROBE_HOST || 'host.docker.internal';
 
     while (Date.now() - start < timeoutMs) {
         // 1. Inspect container state to detect instant crashes
@@ -121,8 +122,11 @@ export async function waitForContainerReadiness(
             };
         }
 
-        // 2. Probe HTTP endpoint
-        const httpResult = await probeHttpEndpoint(hostPort);
+        // 2. Probe HTTP endpoint (try probeHost, then fallback to 127.0.0.1)
+        let httpResult = await probeHttpEndpoint(hostPort, probeHost);
+        if (!httpResult.ok && probeHost !== '127.0.0.1') {
+            httpResult = await probeHttpEndpoint(hostPort, '127.0.0.1');
+        }
         if (httpResult.ok) {
             return {
                 ready: true,
@@ -132,7 +136,7 @@ export async function waitForContainerReadiness(
         }
 
         // 3. Fallback TCP probe (for non-standard HTTP protocols)
-        const tcpOk = await probeTcpPort(hostPort);
+        const tcpOk = (await probeTcpPort(hostPort, probeHost)) || (probeHost !== '127.0.0.1' && await probeTcpPort(hostPort, '127.0.0.1'));
         if (tcpOk) {
             return {
                 ready: true,
