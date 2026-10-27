@@ -154,7 +154,7 @@ func getUpstreamHost() string {
 	return "127.0.0.1"
 }
 
-func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...string) *RouteEntry {
+func (p *ProxyHandler) createDynamicRouteEntry(subdomain string, port int, aliasOf ...string) *RouteEntry {
 	upstreamHost := getUpstreamHost()
 	targetURL, err := url.Parse(fmt.Sprintf("http://%s:%d", upstreamHost, port))
 	if err != nil {
@@ -192,7 +192,7 @@ func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...st
 		containerTarget = aliasOf[0]
 	}
 
-	entry := &RouteEntry{
+	return &RouteEntry{
 		Subdomain:     subdomain,
 		Type:          RouteTypeDynamic,
 		Port:          port,
@@ -202,6 +202,13 @@ func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...st
 		ContainerName: fmt.Sprintf("stratus-%s", containerTarget),
 		Status:        "running",
 		LastActive:    time.Now(),
+	}
+}
+
+func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...string) *RouteEntry {
+	entry := p.createDynamicRouteEntry(subdomain, port, aliasOf...)
+	if entry == nil {
+		return nil
 	}
 
 	p.routeMu.Lock()
@@ -309,39 +316,7 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 		}
 		if err := json.Unmarshal(data, &aliasMeta); err == nil {
 			if aliasMeta.Type == "dynamic" && aliasMeta.Port > 0 {
-				targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", aliasMeta.Port))
-				if err == nil {
-					transport := &http.Transport{
-						Proxy: http.ProxyFromEnvironment,
-						DialContext: (&net.Dialer{
-							Timeout:   5 * time.Second,
-							KeepAlive: 30 * time.Second,
-						}).DialContext,
-						MaxIdleConns:        100,
-						MaxIdleConnsPerHost: 20,
-						IdleConnTimeout:     90 * time.Second,
-					}
-					proxy := httputil.NewSingleHostReverseProxy(targetURL)
-					proxy.Transport = transport
-					proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
-						log.Printf("[PROXY] Error proxying to alias container port %d: %v", aliasMeta.Port, proxyErr)
-						http.Error(rw, fmt.Sprintf("502 Bad Gateway: Application container on port %d unreachable", aliasMeta.Port), http.StatusBadGateway)
-					}
-					origDirector := proxy.Director
-					proxy.Director = func(req *http.Request) {
-						origDirector(req)
-						req.Header.Set("X-Forwarded-Host", req.Host)
-						req.Header.Set("X-Forwarded-Proto", "http")
-					}
-
-					entry = &RouteEntry{
-						Subdomain:    subdomain,
-						Type:         RouteTypeDynamic,
-						Port:         aliasMeta.Port,
-						UpstreamURL:  targetURL,
-						ReverseProxy: proxy,
-						UpdatedAt:    time.Now(),
-					}
+				if entry = p.createDynamicRouteEntry(subdomain, aliasMeta.Port, aliasMeta.Target); entry != nil {
 					p.routes[subdomain] = entry
 					return entry
 				}
@@ -372,39 +347,7 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 			Port int    `json:"port"`
 		}
 		if err := json.Unmarshal(data, &runtimeMeta); err == nil && runtimeMeta.Type == "dynamic" && runtimeMeta.Port > 0 {
-			targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", runtimeMeta.Port))
-			if err == nil {
-				transport := &http.Transport{
-					Proxy: http.ProxyFromEnvironment,
-					DialContext: (&net.Dialer{
-						Timeout:   5 * time.Second,
-						KeepAlive: 30 * time.Second,
-					}).DialContext,
-					MaxIdleConns:        100,
-					MaxIdleConnsPerHost: 20,
-					IdleConnTimeout:     90 * time.Second,
-				}
-				proxy := httputil.NewSingleHostReverseProxy(targetURL)
-				proxy.Transport = transport
-				proxy.ErrorHandler = func(rw http.ResponseWriter, req *http.Request, proxyErr error) {
-					log.Printf("[PROXY] Error proxying to container port %d: %v", runtimeMeta.Port, proxyErr)
-					http.Error(rw, fmt.Sprintf("502 Bad Gateway: Application container on port %d unreachable", runtimeMeta.Port), http.StatusBadGateway)
-				}
-				origDirector := proxy.Director
-				proxy.Director = func(req *http.Request) {
-					origDirector(req)
-					req.Header.Set("X-Forwarded-Host", req.Host)
-					req.Header.Set("X-Forwarded-Proto", "http")
-				}
-
-				entry = &RouteEntry{
-					Subdomain:    subdomain,
-					Type:         RouteTypeDynamic,
-					Port:         runtimeMeta.Port,
-					UpstreamURL:  targetURL,
-					ReverseProxy: proxy,
-					UpdatedAt:    time.Now(),
-				}
+			if entry = p.createDynamicRouteEntry(subdomain, runtimeMeta.Port); entry != nil {
 				p.routes[subdomain] = entry
 				return entry
 			}
