@@ -125,7 +125,7 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 		switch rMsg.Action {
 		case "set":
 			if rMsg.Type == string(RouteTypeDynamic) && rMsg.Port > 0 {
-				p.SetDynamicRoute(rMsg.Subdomain, rMsg.Port)
+				p.SetDynamicRoute(rMsg.Subdomain, rMsg.Port, rMsg.AliasOf)
 				log.Printf("[ROUTER] In-memory route registered: %s -> dynamic port %d (aliasOf: %s)", rMsg.Subdomain, rMsg.Port, rMsg.AliasOf)
 			} else if rMsg.Type == string(RouteTypeStatic) {
 				if rMsg.AliasOf != "" {
@@ -143,8 +143,20 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 }
 
 // SetDynamicRoute ลงทะเบียน Dynamic Upstream Container เข้าสู่ In-Memory Table
-func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int) *RouteEntry {
-	targetURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+// getUpstreamHost resolves host.docker.internal inside docker or 127.0.0.1 outside
+func getUpstreamHost() string {
+	if h := os.Getenv("UPSTREAM_HOST"); h != "" {
+		return h
+	}
+	if _, err := net.LookupHost("host.docker.internal"); err == nil {
+		return "host.docker.internal"
+	}
+	return "127.0.0.1"
+}
+
+func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...string) *RouteEntry {
+	upstreamHost := getUpstreamHost()
+	targetURL, err := url.Parse(fmt.Sprintf("http://%s:%d", upstreamHost, port))
 	if err != nil {
 		log.Printf("[ROUTER] Invalid target URL for %s on port %d: %v", subdomain, port, err)
 		return nil
@@ -175,6 +187,11 @@ func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int) *RouteEntry {
 		req.Header.Set("X-Forwarded-Proto", "http")
 	}
 
+	containerTarget := subdomain
+	if len(aliasOf) > 0 && aliasOf[0] != "" {
+		containerTarget = aliasOf[0]
+	}
+
 	entry := &RouteEntry{
 		Subdomain:     subdomain,
 		Type:          RouteTypeDynamic,
@@ -182,7 +199,7 @@ func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int) *RouteEntry {
 		UpstreamURL:   targetURL,
 		ReverseProxy:  proxy,
 		UpdatedAt:     time.Now(),
-		ContainerName: fmt.Sprintf("stratus-%s", subdomain),
+		ContainerName: fmt.Sprintf("stratus-%s", containerTarget),
 		Status:        "running",
 		LastActive:    time.Now(),
 	}
@@ -482,7 +499,7 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 		}
 
 		if req.Type == string(RouteTypeDynamic) && req.Port > 0 {
-			entry := p.SetDynamicRoute(req.Subdomain, req.Port)
+			entry := p.SetDynamicRoute(req.Subdomain, req.Port, req.AliasOf)
 			w.WriteHeader(http.StatusOK)
 			json.NewEncoder(w).Encode(entry)
 		} else if req.Type == string(RouteTypeStatic) {
@@ -530,10 +547,11 @@ func (p *ProxyHandler) wakeUpAndBufferRequest(route *RouteEntry) error {
 		payload := fmt.Sprintf(`{"action":"wake","containerName":"%s"}`, route.ContainerName)
 		p.redisClient.Publish(context.Background(), "stratus:scale", payload)
 	}
-	// 2. วนลูปเช็ค TCP Port ทุกๆ 50ms จนกว่า Container จะพร้อม (Timeout ไม่เกิน 5 วินาที)
-	deadline := time.Now().Add(5 * time.Second)
+	// 2. วนลูปเช็ค TCP Port ทุกๆ 50ms จนกว่า Container จะพร้อม (Timeout ไม่เกิน 10 วินาที)
+	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", route.Port), 100*time.Millisecond)
+		upstreamHost := getUpstreamHost()
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("%s:%d", upstreamHost, route.Port), 100*time.Millisecond)
 		if err == nil {
 			conn.Close()
 			route.Status = "running"
