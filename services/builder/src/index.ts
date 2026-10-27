@@ -11,6 +11,42 @@ redisConsumer.on('error', (err: Error) => {
     console.error('[REDIS] Consumer connection error:', err.message);
 });
 
+// --- Scale-to-Zero Lifecycle Listener ---
+const lifecycleRedis = new Redis({
+    host: process.env.REDIS_HOST || '127.0.0.1',
+    port: Number(process.env.REDIS_PORT) || 6379,
+});
+async function startLifecycleSubscriber() {
+    await lifecycleRedis.subscribe('stratus:scale');
+    console.log('[SCALE-TO-ZERO] Subscribed to lifecycle events on "stratus:scale"');
+    lifecycleRedis.on('message', async (channel, message) => {
+        if (channel !== 'stratus:scale') return;
+        try {
+            const { action, containerName } = JSON.parse(message);
+            const Docker = (await import('dockerode')).default;
+            const docker = new Docker();
+            const container = docker.getContainer(containerName);
+            if (action === 'wake') {
+                console.log(`[SCALE-TO-ZERO] ⚡ Waking up container: ${containerName}`);
+                await container.start().catch((err: any) => {
+                    // ถ้า container รันอยู่แล้ว ให้ข้าม error 304 (not modified)
+                    if (err.statusCode !== 304) console.error(`Failed to wake ${containerName}:`, err.message);
+                });
+            } else if (action === 'sleep') {
+                console.log(`[SCALE-TO-ZERO] 💤 Putting container to sleep: ${containerName}`);
+                await container.stop().catch((err: any) => {
+                    // ถ้า container หยุดอยู่แล้ว ให้ข้าม error 304
+                    if (err.statusCode !== 304) console.error(`Failed to sleep ${containerName}:`, err.message);
+                });
+            }
+        } catch (err: any) {
+            console.error('[SCALE-TO-ZERO] Error processing lifecycle message:', err.message);
+        }
+    });
+}
+startLifecycleSubscriber();
+// ----------------------------------------
+
 const STREAM_KEY = 'stream:build';
 const GROUP_NAME = 'builder-group';
 const CONSUMER_NAME = `worker-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;

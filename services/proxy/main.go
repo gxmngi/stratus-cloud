@@ -36,13 +36,17 @@ const (
 
 // RouteEntry ข้อมูลเส้นทางที่แคชไว้ใน RAM สำหรับ $O(1)$ routing
 type RouteEntry struct {
-	Subdomain    string                 `json:"subdomain"`
-	Type         RouteType              `json:"type"`
-	Port         int                    `json:"port,omitempty"`
-	DistDir      string                 `json:"distDir,omitempty"`
-	UpstreamURL  *url.URL               `json:"-"`
-	ReverseProxy *httputil.ReverseProxy `json:"-"`
-	UpdatedAt    time.Time              `json:"updatedAt"`
+	Subdomain     string                 `json:"subdomain"`
+	Type          RouteType              `json:"type"`
+	Port          int                    `json:"port,omitempty"`
+	DistDir       string                 `json:"distDir,omitempty"`
+	UpstreamURL   *url.URL               `json:"-"`
+	ReverseProxy  *httputil.ReverseProxy `json:"-"`
+	UpdatedAt     time.Time              `json:"updatedAt"`
+	ContainerName string                 `json:"containerName,omitempty"`
+	Status        string                 `json:"status,omitempty"` // "running" หรือ "sleeping"
+	LastActive    time.Time              `json:"-"`
+	stateMu       sync.Mutex             `json:"-"`
 }
 
 // ProxyHandler โครงสร้างจัดการ Subdomain Routing พร้อม In-Memory Cache & Redis Sub
@@ -84,6 +88,7 @@ func NewProxyHandler() *ProxyHandler {
 			Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
 		})
 		go handler.startRedisRouteSubscriber()
+		go handler.startIdleContainerReaper()
 	}
 
 	return handler
@@ -171,12 +176,15 @@ func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int) *RouteEntry {
 	}
 
 	entry := &RouteEntry{
-		Subdomain:    subdomain,
-		Type:         RouteTypeDynamic,
-		Port:         port,
-		UpstreamURL:  targetURL,
-		ReverseProxy: proxy,
-		UpdatedAt:    time.Now(),
+		Subdomain:     subdomain,
+		Type:          RouteTypeDynamic,
+		Port:          port,
+		UpstreamURL:   targetURL,
+		ReverseProxy:  proxy,
+		UpdatedAt:     time.Now(),
+		ContainerName: fmt.Sprintf("stratus-%s", subdomain),
+		Status:        "running",
+		LastActive:    time.Now(),
 	}
 
 	p.routeMu.Lock()
@@ -509,6 +517,66 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 	}
 }
 
+// wakeUpAndBufferRequest ทำหน้าที่ปลุก Container และรอจนกว่า Port จะพร้อมรับข้อมูล
+func (p *ProxyHandler) wakeUpAndBufferRequest(route *RouteEntry) error {
+	route.stateMu.Lock()
+	defer route.stateMu.Unlock()
+	if route.Status == "running" {
+		return nil
+	}
+	log.Printf("[SCALE-TO-ZERO] ⚡ Incoming request! Waking up %s (Container: %s)", route.Subdomain, route.ContainerName)
+	// 1. ส่งสัญญาณสั่ง Worker ให้ docker start ผ่าน Redis
+	if p.redisClient != nil {
+		payload := fmt.Sprintf(`{"action":"wake","containerName":"%s"}`, route.ContainerName)
+		p.redisClient.Publish(context.Background(), "stratus:scale", payload)
+	}
+	// 2. วนลูปเช็ค TCP Port ทุกๆ 50ms จนกว่า Container จะพร้อม (Timeout ไม่เกิน 5 วินาที)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", route.Port), 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			route.Status = "running"
+			route.LastActive = time.Now()
+			log.Printf("[SCALE-TO-ZERO] ✅ Container %s woke up and ready on port %d!", route.ContainerName, route.Port)
+			return nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return fmt.Errorf("container failed to wake up in time")
+}
+
+// startIdleContainerReaper ตรวจจับแอปที่ไม่มีคนใช้งานเกิน 60 วินาที แล้วสั่งหลับ
+func (p *ProxyHandler) startIdleContainerReaper() {
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	const idleTimeout = 60 * time.Second // ตั้งไว้ 60 วินาทีเพื่อความสะดวกในการทดสอบ/เดโม
+	for range ticker.C {
+		p.routeMu.RLock()
+		var candidates []*RouteEntry
+		for _, r := range p.routes {
+			if r.Type == RouteTypeDynamic && r.Status == "running" {
+				if time.Since(r.LastActive) > idleTimeout {
+					candidates = append(candidates, r)
+				}
+			}
+		}
+		p.routeMu.RUnlock()
+		for _, r := range candidates {
+			r.stateMu.Lock()
+			if r.Status == "running" && time.Since(r.LastActive) > idleTimeout {
+				r.Status = "sleeping"
+				log.Printf("[SCALE-TO-ZERO] 💤 Route %s idle for %v -> Putting to sleep (%s)", r.Subdomain, time.Since(r.LastActive), r.ContainerName)
+				if p.redisClient != nil {
+					payload := fmt.Sprintf(`{"action":"sleep","containerName":"%s"}`, r.ContainerName)
+					p.redisClient.Publish(context.Background(), "stratus:scale", payload)
+				}
+			}
+			r.stateMu.Unlock()
+		}
+	}
+}
+
 func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Health check endpoint probe
 	if r.URL.Path == "/healthz" {
@@ -571,6 +639,16 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Dynamic Reverse Proxy Route (Pre-created ReverseProxy)
 	if route.Type == RouteTypeDynamic && route.ReverseProxy != nil {
+		// ถ้าแอปหลับอยู่ ให้กัก Request แล้วปลุกขึ้นมาก่อน!
+		if route.Status == "sleeping" {
+			if err := p.wakeUpAndBufferRequest(route); err != nil {
+				log.Printf("[PROXY] Cold start failed for %s: %v", route.Subdomain, err)
+				http.Error(w, "504 Gateway Timeout: Cold start failed", http.StatusGatewayTimeout)
+				return
+			}
+		}
+
+		route.LastActive = time.Now() // บันทึกเวลาว่ามีคนเข้าชมล่าสุด
 		route.ReverseProxy.ServeHTTP(w, r)
 		return
 	}
