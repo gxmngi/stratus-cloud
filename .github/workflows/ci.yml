@@ -45,7 +45,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
           cache-dependency-path: apps/web/package-lock.json
 
@@ -53,9 +53,25 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Lint web
+        working-directory: apps/web
+        run: npm run lint
+
       - name: Build Next.js
         working-directory: apps/web
         run: npm run build
+
+      - name: Install API dependencies for browser tests
+        working-directory: services/api
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test authentication in the browser
+        working-directory: apps/web
+        run: npm run test:e2e
 
   proxy:
     name: Test Go Reverse Proxy

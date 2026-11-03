@@ -12,7 +12,7 @@ const credentials = { email: 'http@example.com', password: 'a long HTTP test pas
 
 async function startServer(dashboardOrigin = origin) {
     const app = express();
-    app.use(cors({ origin: dashboardOrigin, credentials: true }));
+    app.use(cors({ origin: dashboardOrigin, credentials: true, exposedHeaders: ['Retry-After'] }));
     app.use('/api/auth', createAuthRouter(dashboardOrigin));
     const server: Server = await new Promise(resolve => {
         const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
@@ -62,6 +62,7 @@ test.describe('Authentication HTTP API', () => {
         assert.match(login.headers.get('set-cookie')!, /Max-Age=604800/);
         assert.equal(login.headers.get('access-control-allow-origin'), origin);
         assert.equal(login.headers.get('access-control-allow-credentials'), 'true');
+        assert.equal(login.headers.get('access-control-expose-headers'), 'Retry-After');
         assert.equal(login.headers.get('cache-control'), 'no-store');
         const cookie = cookieOf(login);
         assert.equal((await login.json()).user.password_hash, undefined);

@@ -1,4 +1,6 @@
 export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
+let sessionEpoch = 0;
+export function advanceSessionEpoch() { sessionEpoch++; }
 
 export interface AuthUser {
   id: string;
@@ -14,8 +16,14 @@ export class ApiError extends Error {
 }
 
 // Browser-only transport. HttpOnly session tokens never enter application state.
-export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  return fetch(input, { ...init, credentials: "include" });
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const requestEpoch = sessionEpoch;
+  const response = await fetch(input, { ...init, credentials: "include", signal: init?.signal ?? AbortSignal.timeout(15000) });
+  const url = input instanceof Request ? input.url : String(input);
+  if (response.status === 401 && requestEpoch === sessionEpoch && !new URL(url, API_URL).pathname.startsWith("/api/auth/") && typeof window !== "undefined") {
+    window.dispatchEvent(new Event("stratus:session-expired"));
+  }
+  return response;
 }
 
 async function authRequest<T>(route: string, body?: { email: string; password: string }): Promise<T> {

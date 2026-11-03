@@ -101,7 +101,6 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
       })
       .catch((err) => {
         if (isSubscribed) term.writeln(`\r\n[STRATUS] ${err instanceof Error ? err.message : "Logs unavailable"}`);
-        console.error("Failed to fetch historical logs:", err);
       });
 
     return () => {

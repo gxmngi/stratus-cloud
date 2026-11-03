@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { API_URL, apiFetch } from "@/lib/api";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { ProtectedWorkspace } from "@/components/auth/ProtectedWorkspace";
 import { 
   ExternalLink, 
   Play, 
@@ -65,12 +67,29 @@ interface DeploymentItem {
 }
 
 export default function Home() {
+  const { user } = useAuth();
+  return <ProtectedWorkspace>{user && <Dashboard key={user.id} />}</ProtectedWorkspace>;
+}
+
+function Dashboard() {
+  const { user, signOut } = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState("");
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError("");
+    try { await signOut(); }
+    catch { setSignOutError("Couldn’t sign out. Check your connection and try again."); }
+    finally { setSigningOut(false); }
+  }
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
   const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<ContainerMetrics | null>(null);
+  const [storedMetrics, setMetrics] = useState<ContainerMetrics | null>(null);
+  const metrics = storedMetrics?.deploymentId === activeDeploymentId ? storedMetrics : null;
   const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [showEnv, setShowEnv] = useState(false);
@@ -230,7 +249,7 @@ export default function Home() {
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.details || `Deployment failed with status ${response.status}`);
+        throw new Error(errJson.error || errJson.details || `Deployment failed with status ${response.status}`);
       }
 
       const data = await response.json();
@@ -247,7 +266,6 @@ export default function Home() {
   // Poll container metrics when active deployment is selected
   useEffect(() => {
     if (!activeDeploymentId) {
-      setMetrics(null);
       return;
     }
 
@@ -313,16 +331,16 @@ export default function Home() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              SYSTEM ONLINE
-            </span>
-            <span className="text-xs text-zinc-500 font-mono border border-zinc-800 px-2 py-0.5 rounded">
-              EDGE PORT 8000
-            </span>
+            <span className="max-w-36 sm:max-w-64 truncate text-xs text-zinc-300" title={user?.email}>{user?.email}</span>
+            <button type="button" onClick={handleSignOut} disabled={signingOut}
+              className="min-h-10 rounded-md border border-zinc-700 px-3 text-xs text-zinc-200 hover:bg-zinc-800 focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-emerald-300 disabled:opacity-50">
+              {signingOut ? "Signing out…" : "Sign out"}
+            </button>
           </div>
         </div>
       </header>
+
+      {signOutError && <p role="alert" className="mx-auto max-w-6xl px-6 pt-4 text-sm text-rose-300">{signOutError}</p>}
 
       {/* Main Container */}
       <main className="max-w-6xl mx-auto px-6 py-10">
@@ -339,11 +357,12 @@ export default function Home() {
         <div className="border border-zinc-800 bg-zinc-900/40 rounded-xl p-6 shadow-xl mb-10">
           <form onSubmit={handleDeploy} className="space-y-4">
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wider text-zinc-400 mb-2">
+              <label htmlFor="git-repository" className="block text-xs font-mono uppercase tracking-wider text-zinc-400 mb-2">
                 Git Repository / Local Project Path
               </label>
               <div className="flex gap-3">
                 <input
+                  id="git-repository"
                   type="text"
                   value={gitUrl}
                   onChange={(e) => setGitUrl(e.target.value)}

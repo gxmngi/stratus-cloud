@@ -125,7 +125,7 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
 
 // อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
 const dashboardOrigin = process.env.DASHBOARD_ORIGIN || 'http://localhost:3000';
-app.use(cors({ origin: dashboardOrigin, credentials: true }));
+app.use(cors({ origin: dashboardOrigin, credentials: true, exposedHeaders: ['Retry-After'] }));
 
 // GitHub Webhook ต้องการ Raw Body สำหรับตรวจ HMAC จึงลงทะเบียนก่อน express.json()
 app.post(

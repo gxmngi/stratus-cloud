@@ -1,4 +1,10 @@
-# Authentication: ready for the login UI
+# Authentication and workspace access
+
+The login and registration pages use a responsive split layout with a compact
+mobile form. Session-protected workspace access is enforced by the API; the
+client gate handles navigation and prevents private-state flashes.
+
+![Stratus sign-in page on desktop](../assets/auth-login-desktop.png)
 
 ## Start local development
 
@@ -28,7 +34,8 @@ it again preserves existing users and does not duplicate sample projects/logs.
 
 In another terminal, start the web app from `apps/web` with `npm run dev`.
 Use `http://localhost:3000` consistently; mixing `localhost` and `127.0.0.1`
-changes the cookie/site context. The login page itself is the next implementation.
+changes the cookie/site context. Open `/login` to sign in or `/register` to create
+an account. The workspace redirects signed-out visitors to `/login`.
 
 | Local account | Password |
 | --- | --- |
@@ -99,16 +106,19 @@ NEXT_PUBLIC_API_URL=http://localhost:4000
 setting. Compose loads the root `.env`; direct `npm start` uses shell environment
 variables and does not automatically load the root `.env`.
 
-### Login UI work to implement next
+### Session behavior in the UI
 
-1. Check `authApi.me()` on load; show a pending state before choosing dashboard/login.
-2. Create email/password inputs with labels, autocomplete and inline errors.
-3. On registration success, ask the user to log in (registration creates no session).
-4. On login success, fetch the current user's deployments.
-5. On logout/session expiry, clear user, deployment selection, logs and metrics;
-   close streams and stop private polling before showing login.
-6. Disable duplicate submits; handle wrong password, network error and 429.
-7. Use a second browser profile/private window for the other account: cookies
+1. The session provider checks `/me` on load, periodically while signed in and on
+   return to a tab. A pending screen prevents a flash of private workspace content.
+2. Forms provide visible labels, autocomplete hints, keyboard focus, password
+   reveal, inline validation, a focused error summary and reduced-motion support.
+3. Registration shows a success screen and asks the user to sign in.
+4. Login fetches the current user's workspace. Logout/session expiry unmounts it,
+   closing streams, stopping polling and dropping private component state.
+5. BroadcastChannel propagates logout/account changes across tabs. Requests from
+   an older session cannot expire a newly accepted session.
+6. Duplicate submissions are blocked; 429 honors Retry-After with a waiting period.
+7. Use a second browser profile/private window for another simultaneous account: cookies
    are shared between tabs in the same browser profile.
 
 ## Existing database migration
@@ -169,10 +179,21 @@ npm run typecheck
 
 # apps/web
 npm run build
+npx playwright install chromium
+npm run test:e2e
 ```
 
 Tests use separate temporary databases and do not seed or clear regular data.
 They cover authentication, ownership, HTTP authorization, WebSocket revocation,
 legacy migration, operator claims and repeatable development data. Redis/Docker
 side effects in authorization tests use fakes; a real deployment end-to-end test
-is a separate milestone.
+is a separate milestone. Browser tests start their own API and web servers on
+ports 4402 and 3100, with a temporary database separate from regular/development
+data. They exercise real session cookies, registration, errors, reload, logout,
+cross-tab behavior, expiry, keyboard use, mobile layout and automated axe checks.
+Automated accessibility checks do not replace manual assistive-technology testing.
+
+Production dependencies pass `npm audit --omit=dev`. The full development tree
+still reports moderate minimatch advisories through ESLint dependencies; these
+require a separate compatible toolchain update. The Next.js runtime was updated
+to 16.4.4 in this milestone.
