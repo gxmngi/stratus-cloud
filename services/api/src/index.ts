@@ -11,6 +11,7 @@ import { githubWebhookHandler } from './github';
 import { initDatabase, dbService, DeploymentRecord } from './db';
 import { getDeploymentMetrics } from './telemetry';
 import { teardownDeployment } from './teardown';
+import { createAuthRouter } from './auth';
 
 const app = express();
 
@@ -157,7 +158,8 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
 });
 
 // อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
-app.use(cors());
+const dashboardOrigin = process.env.DASHBOARD_ORIGIN || 'http://localhost:3000';
+app.use(cors({ origin: dashboardOrigin, credentials: true }));
 
 // GitHub Webhook ต้องการ Raw Body สำหรับตรวจ HMAC จึงลงทะเบียนก่อน express.json()
 app.post(
@@ -166,6 +168,7 @@ app.post(
     githubWebhookHandler(redisPublisher, newDeploymentId),
 );
 
+app.use('/api/auth', createAuthRouter(dashboardOrigin));
 app.use(express.json());
 
 // สร้าง HTTP Server หลัก

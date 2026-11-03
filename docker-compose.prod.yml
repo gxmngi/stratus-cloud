@@ -21,6 +21,7 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: "6379"
       DATA_DIR: /data
+      DASHBOARD_ORIGIN: ${DASHBOARD_ORIGIN:-http://localhost:3000}
       GITHUB_WEBHOOK_SECRET: ${GITHUB_WEBHOOK_SECRET:-}
     volumes:
       - stratus_data:/data
