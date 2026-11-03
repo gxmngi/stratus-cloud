@@ -4,6 +4,7 @@
   "scripts": {
     "dev": "node scripts/dev-stack.mjs",
     "dev:auth": "node scripts/dev-stack.mjs --auth-only",
-    "test:deploy": "node scripts/smoke-deploy.mjs"
+    "test:deploy": "node scripts/smoke-deploy.mjs",
+    "test:deploy:dynamic": "node scripts/smoke-dynamic.mjs"
   }
 }

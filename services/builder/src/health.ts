@@ -135,14 +135,8 @@ export async function waitForContainerReadiness(
             };
         }
 
-        // 3. Fallback TCP probe (for non-standard HTTP protocols)
-        const tcpOk = (await probeTcpPort(hostPort, probeHost)) || (probeHost !== '127.0.0.1' && await probeTcpPort(hostPort, '127.0.0.1'));
-        if (tcpOk) {
-            return {
-                ready: true,
-                latencyMs: Date.now() - start,
-            };
-        }
+        // A published Docker port may accept TCP before the HTTP app starts.
+        // Only a successful HTTP probe makes these web deployments ready.
 
         // Sleep before next probe attempt
         await new Promise((r) => setTimeout(r, intervalMs));

@@ -7,6 +7,7 @@ import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 import { findAvailablePort } from './port-allocator';
 import { waitForContainerReadiness } from './health';
 import { resolveDeploymentWorkspace } from './workspace';
+import { reservedRuntimePorts } from './runtime-ports';
 
 const docker = new Docker();
 
@@ -388,7 +389,7 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Detected dynamic server application`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Launching application container: "${startCmd}"`);
 
-        const allocatedPort = await findAvailablePort();
+        const allocatedPort = await findAvailablePort(4100, 4999, await reservedRuntimePorts(docker));
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Allocated dynamic host port: ${allocatedPort}`);
 
         let runContainer: Docker.Container;

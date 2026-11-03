@@ -108,7 +108,7 @@ async function main() {
         DASHBOARD_ORIGIN: 'http://localhost:3000', NEXT_PUBLIC_API_URL: 'http://localhost:4000',
         WORKSPACE_DIR: workspace, HOST_WORKSPACE_PATH: workspace,
         REDIS_HOST: '127.0.0.1', REDIS_PORT: '6379', UPSTREAM_HOST: '127.0.0.1',
-        PROBE_HOST: '127.0.0.1', PROXY_HOST: '127.0.0.1', API_HOST: '127.0.0.1',
+        PROBE_HOST: '127.0.0.1', PROXY_HOST: '127.0.0.1', API_HOST: '127.0.0.1', DISABLE_SCALE_TO_ZERO: '1',
         TLS_DOMAINS: '', BASE_DOMAIN: '', PROXY_CONTROL_TOKEN: '', GITHUB_WEBHOOK_SECRET: '', GITHUB_TOKEN: '' };
     if (!authOnly) {
         await prepareDocker();

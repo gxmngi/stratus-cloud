@@ -22,6 +22,8 @@ The launcher starts Docker Desktop if necessary, checks required images, creates
 starts the local processes. Existing unrelated containers are left alone.
 Ctrl+C stops only the processes launched by this command; Redis remains available.
 API and proxy use loopback listeners in this local configuration.
+The local launcher sets `DISABLE_SCALE_TO_ZERO=1` to keep application containers
+awake while developing. Other launch configurations retain automatic idle sleep.
 
 If an old Compose deployment from this repository auto-starts and owns the ports,
 stop its platform services before using the local launcher:
@@ -78,7 +80,26 @@ checks the actual proxy responses through these steps:
 The final active preview is retained for inspection. A report with its URLs is
 saved in `services/data/local-deploy-report.json` (ignored by Git). Cookies and
 passwords are not written into the report. The check verifies static deployments;
-dynamic application and worker crash-recovery checks are separate milestones.
+worker crash-recovery checks are a separate milestone.
+
+For dynamic promotion and rollback, deploy `fixtures/demo-server` once as Alice,
+then run:
+
+```powershell
+npm run test:deploy:dynamic
+```
+
+This checks the current production health response, builds a new dynamic preview,
+promotes it, and rolls back to the original deployment. It samples 25 production
+health requests during each switch and verifies the returned deployment IDs.
+These 50 requests are a smoke check, not a load test or a guarantee of zero downtime.
+The original production and new preview are retained; the report is written to
+`services/data/dynamic-promote-report.json` (ignored by Git). Avoid concurrent
+manual promotion or rollback of this project while the check runs.
+
+Dynamic builds reserve host ports used by both running and stopped Stratus
+containers so that a new deployment does not take a sleeping deployment's port.
+Readiness requires a successful HTTP probe; an open TCP port alone is insufficient.
 
 ## Queue and failure behavior
 

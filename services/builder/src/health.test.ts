@@ -1,10 +1,29 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'http';
+import net from 'node:net';
 import { probeTcpPort, probeHttpEndpoint, waitForContainerReadiness } from './health';
 import type Docker from 'dockerode';
 
 test.describe('Readiness Probe & Health Checks', () => {
+    test('an open TCP port without an HTTP response is not ready', async () => {
+        const previousHost = process.env.PROBE_HOST;
+        process.env.PROBE_HOST = '127.0.0.1';
+        const server = net.createServer(socket => socket.destroy());
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const port = (server.address() as net.AddressInfo).port;
+            assert.equal(await probeTcpPort(port, '127.0.0.1', 200), true);
+            const container = { inspect: async () => ({ State: { Running: true } }) } as unknown as Docker.Container;
+            const result = await waitForContainerReadiness(container, port, { timeoutMs: 150, intervalMs: 10 });
+            assert.equal(result.ready, false);
+            assert.match(result.error || '', /timed out/);
+        } finally {
+            await new Promise<void>(resolve => server.close(() => resolve()));
+            if (previousHost === undefined) delete process.env.PROBE_HOST;
+            else process.env.PROBE_HOST = previousHost;
+        }
+    });
     test('probeTcpPort returns false on closed port', async () => {
         const isOpen = await probeTcpPort(59998, '127.0.0.1', 200);
         assert.equal(isOpen, false);

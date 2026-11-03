@@ -89,7 +89,9 @@ func NewProxyHandler() *ProxyHandler {
 			Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
 		})
 		go handler.startRedisRouteSubscriber()
-		go handler.startIdleContainerReaper()
+		if os.Getenv("DISABLE_SCALE_TO_ZERO") != "1" {
+			go handler.startIdleContainerReaper()
+		}
 	}
 
 	return handler
