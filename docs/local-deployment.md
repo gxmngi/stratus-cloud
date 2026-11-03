@@ -80,7 +80,7 @@ checks the actual proxy responses through these steps:
 The final active preview is retained for inspection. A report with its URLs is
 saved in `services/data/local-deploy-report.json` (ignored by Git). Cookies and
 passwords are not written into the report. The check verifies static deployments;
-worker crash-recovery checks are a separate milestone.
+worker crash-recovery checks are described in [Build recovery](build-recovery.md).
 
 For dynamic promotion and rollback, deploy `fixtures/demo-server` once as Alice,
 then run:

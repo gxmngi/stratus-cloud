@@ -10,6 +10,16 @@ jobs:
   services:
     name: Test ${{ matrix.service }}
     runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     strategy:
       matrix:
         service: [api, builder]
@@ -31,6 +41,26 @@ jobs:
 
       - name: Run test suite
         run: npm test
+        env:
+          REDIS_TEST_URL: redis://127.0.0.1:6379
+
+      - name: Check builder types
+        if: matrix.service == 'builder'
+        run: npx tsc --noEmit
+
+      - name: Install API dependencies for recovery check
+        if: matrix.service == 'builder'
+        working-directory: services/api
+        run: npm ci
+
+      - name: Pull recovery check images
+        if: matrix.service == 'builder'
+        run: docker pull node:20-alpine
+
+      - name: Verify worker crash recovery with Docker
+        if: matrix.service == 'builder'
+        working-directory: .
+        run: npm run test:recovery
 
       - name: Check API types
         if: matrix.service == 'api'

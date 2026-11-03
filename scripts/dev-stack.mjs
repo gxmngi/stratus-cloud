@@ -60,18 +60,18 @@ async function waitFor(url, name) {
 
 async function prepareDocker() {
     let ready = false;
-    try { command('docker', ['info', '--format', '{{.OSType}}'], { timeout: 5000 }); ready = true; } catch { /* Start Desktop below. */ }
+    try { command('docker', ['version', '--format', '{{.Server.Os}}'], { timeout: 5000 }); ready = true; } catch { /* Start Desktop below. */ }
     if (!ready) {
         console.log('[LOCAL] Starting Docker Desktop; waiting for the Linux engine…');
         const starter = spawn('docker', ['desktop', 'start'], { stdio: 'ignore', windowsHide: true });
         starter.on('error', () => {});
         for (let attempt = 0; attempt < 36; attempt++) {
             await delay(3000);
-            try { command('docker', ['info', '--format', '{{.OSType}}'], { timeout: 2000 }); ready = true; break; } catch { /* Starting. */ }
+            try { command('docker', ['version', '--format', '{{.Server.Os}}'], { timeout: 2000 }); ready = true; break; } catch { /* Starting. */ }
         }
     }
     if (!ready) throw new Error('Docker Linux engine is unavailable. Open Docker Desktop and resolve the startup error, then retry.');
-    if (command('docker', ['info', '--format', '{{.OSType}}']) !== 'linux') throw new Error('Switch Docker Desktop to Linux containers.');
+    if (command('docker', ['version', '--format', '{{.Server.Os}}']) !== 'linux') throw new Error('Switch Docker Desktop to Linux containers.');
     for (const image of ['redis:7-alpine', 'node:20-alpine']) {
         try { command('docker', ['image', 'inspect', image]); }
         catch { console.log(`[LOCAL] Pulling ${image}`); command('docker', ['pull', image], { timeout: 600000, stdio: 'inherit' }); }

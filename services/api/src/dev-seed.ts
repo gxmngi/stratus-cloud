@@ -19,7 +19,8 @@ export async function seedDevelopmentData() {
             const id = `demo-${index}-${status.toLowerCase()}`;
             if (dbService.getDeployment(id)) continue;
             dbService.createDeployment({ id, project_id: project.id, git_url: project.git_url,
-                status, live_url: 'about:blank', runtime_type: 'static', created_at: Date.now() });
+                status: status === 'FAILED' ? 'QUEUED' : status,
+                live_url: 'about:blank', runtime_type: 'static', created_at: Date.now() });
             dbService.appendLog(id, '[DEMO] Sample metadata for UI development. No application was deployed.');
             if (status === 'FAILED') {
                 dbService.updateDeploymentStatus(id, 'FAILED', '[DEMO] Example build failure');

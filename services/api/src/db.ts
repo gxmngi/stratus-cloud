@@ -295,13 +295,13 @@ export const dbService = {
             db.prepare(`
                 UPDATE deployments 
                 SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING')
             `).run(status, error || null, now, durationMs, id);
         } else {
             db.prepare(`
                 UPDATE deployments 
                 SET status = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING')
             `).run(status, id);
         }
     },
