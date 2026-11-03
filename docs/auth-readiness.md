@@ -8,6 +8,10 @@ client gate handles navigation and prevents private-state flashes.
 
 ## Start local development
 
+For real builds, run `npm run dev` at the repository root and follow
+[Real local deployment](local-deployment.md). The commands below describe the
+auth-only mode used to work on forms without running build infrastructure.
+
 Use Node.js 22. From `services/api`, run:
 
 ```powershell

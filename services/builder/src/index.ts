@@ -16,6 +16,7 @@ const lifecycleRedis = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,
 });
+lifecycleRedis.on('error', (err: Error) => console.error('[REDIS] Lifecycle connection error:', err.message));
 async function startLifecycleSubscriber() {
     await lifecycleRedis.subscribe('stratus:scale');
     console.log('[SCALE-TO-ZERO] Subscribed to lifecycle events on "stratus:scale"');
@@ -53,7 +54,7 @@ const CONSUMER_NAME = `worker-${process.pid}-${crypto.randomBytes(3).toString('h
 
 async function initConsumerGroup() {
     try {
-        await redisConsumer.xgroup('CREATE', STREAM_KEY, GROUP_NAME, '$', 'MKSTREAM');
+        await redisConsumer.xgroup('CREATE', STREAM_KEY, GROUP_NAME, '0', 'MKSTREAM');
         console.log(`[REDIS] Initialized stream consumer group: "${GROUP_NAME}" on "${STREAM_KEY}"`);
     } catch (err: unknown) {
         const errorMsg = err instanceof Error ? err.message : String(err);
@@ -117,7 +118,7 @@ async function startWorker() {
         // Stream empty or non-existent yet
     }
 
-    console.log(`[INFO] Listening for deployment jobs from Redis stream "${STREAM_KEY}" & queue "queue:build"...`);
+    console.log(`[INFO] Listening for deployment jobs from Redis stream "${STREAM_KEY}"`);
 
     while (true) {
         try {
@@ -135,22 +136,15 @@ async function startWorker() {
                     const jobFieldIdx = fields.indexOf('job');
                     if (jobFieldIdx !== -1) {
                         const payload = fields[jobFieldIdx + 1];
-                        try {
-                            await processJob(payload);
-                        } finally {
-                            // Acknowledge message upon processing completion to prevent message loss
-                            await redisConsumer.xack(STREAM_KEY, GROUP_NAME, id);
-                        }
+                        await processJob(payload);
+                        // Completed builds (including a reported build failure) are handled.
+                        // Unexpected exceptions remain pending for recovery.
+                        await redisConsumer.xack(STREAM_KEY, GROUP_NAME, id);
                     }
                 }
                 continue;
             }
 
-            // 2. Fallback check for legacy queue:build items (backward-compatible)
-            const legacyItem = await redisConsumer.rpop('queue:build');
-            if (legacyItem) {
-                await processJob(legacyItem);
-            }
         } catch (err) {
             console.error('[FATAL] Worker loop error:', err);
             await new Promise((resolve) => setTimeout(resolve, 1000));

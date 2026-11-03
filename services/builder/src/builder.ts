@@ -6,6 +6,7 @@ import Redis from 'ioredis';
 import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 import { findAvailablePort } from './port-allocator';
 import { waitForContainerReadiness } from './health';
+import { resolveDeploymentWorkspace } from './workspace';
 
 const docker = new Docker();
 
@@ -134,9 +135,9 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         outputDir: customOutputDir,
     } = options;
 
-    const workspaceDir = path.join(WORKSPACE_ROOT, deploymentId);
+    const workspaceDir = resolveDeploymentWorkspace(WORKSPACE_ROOT, deploymentId);
     const codeDir = path.join(workspaceDir, 'code');
-    const hostCodeDir = path.join(HOST_WORKSPACE_ROOT, deploymentId, 'code');
+    const hostCodeDir = path.join(resolveDeploymentWorkspace(HOST_WORKSPACE_ROOT, deploymentId), 'code');
 
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Initializing build environment`);
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Workspace directory: ${workspaceDir}`);

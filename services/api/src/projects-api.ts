@@ -322,7 +322,6 @@ export function createProjectRouter(options: {
             // ส่ง Job เข้า Redis Stream "stream:build" เพื่อความเสถียร (At-least-once delivery)
             const jobJson = JSON.stringify(jobPayload);
             await redisPublisher.xadd('stream:build', '*', 'job', jobJson);
-            await redisPublisher.rpush('queue:build', jobJson);
 
             // ตอบกลับผู้ใช้ทันที (Non-blocking / Asynchronous Response)
             res.status(202).json({
@@ -334,9 +333,9 @@ export function createProjectRouter(options: {
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);
             console.error('[API] Error queuing deployment job:', errorMsg);
+            dbService.updateDeploymentStatus(deploymentId, 'FAILED', 'Deployment could not be queued. Please try again.');
             res.status(503).json({
-                error: 'Failed to dispatch deployment job',
-                details: errorMsg
+                error: 'Deployment service is unavailable. Please try again.'
             });
         }
     });

@@ -30,6 +30,15 @@ test.describe('Deployment Teardown & Lifecycle GC', () => {
         }
     });
 
+    test('rejects a workspace traversal before changing deployment records', async () => {
+        dbService.createDeployment({ id: '../outside', project_id: null, git_url: 'fixtures/demo-app',
+            status: 'READY', live_url: 'about:blank', created_at: 1 });
+        const result = await teardownDeployment('../outside', testWorkspace);
+        assert.equal(result.success, false);
+        assert.match(result.error || '', /Invalid deployment workspace/);
+        assert.ok(dbService.getDeployment('../outside'));
+    });
+
     test('refuses to teardown active production deployment', async () => {
         const project = dbService.getOrCreateProject('https://github.com/stratus/prod-app.git');
         dbService.createDeployment({

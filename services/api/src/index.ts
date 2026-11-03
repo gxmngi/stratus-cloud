@@ -60,6 +60,9 @@ const offline = process.env.AUTH_DEV_OFFLINE === '1' && process.env.NODE_ENV !==
 
 // Redis Client สำหรับ Push งานเข้า Queue
 const redisPublisher = new Redis({
+    enableOfflineQueue: false,
+    maxRetriesPerRequest: 1,
+    commandTimeout: 5000,
     lazyConnect: offline,
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,

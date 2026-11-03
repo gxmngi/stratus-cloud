@@ -194,6 +194,7 @@ func TestDynamicContainerReverseProxy(t *testing.T) {
 
 func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
 	t.Setenv("UPSTREAM_HOST", "127.0.0.1")
+	t.Setenv("PROXY_CONTROL_TOKEN", "test-control-token")
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -213,6 +214,7 @@ func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
 		"port":      upstreamPort,
 	})
 	postReq := httptest.NewRequest("POST", "/_internal/routes", bytes.NewReader(bodyJSON))
+	postReq.Header.Set("Authorization", "Bearer test-control-token")
 	postRec := httptest.NewRecorder()
 	p.ServeHTTP(postRec, postReq)
 
@@ -222,6 +224,7 @@ func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
 
 	// 2. Fetch routes list via GET /_internal/routes
 	getReq := httptest.NewRequest("GET", "/_internal/routes", nil)
+	getReq.Header.Set("Authorization", "Bearer test-control-token")
 	getRec := httptest.NewRecorder()
 	p.ServeHTTP(getRec, getReq)
 
@@ -247,6 +250,7 @@ func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
 
 	// 4. Delete the route via DELETE /_internal/routes/in-mem-app
 	delReq := httptest.NewRequest("DELETE", "/_internal/routes/in-mem-app", nil)
+	delReq.Header.Set("Authorization", "Bearer test-control-token")
 	delRec := httptest.NewRecorder()
 	p.ServeHTTP(delRec, delReq)
 

@@ -19,6 +19,14 @@ export async function teardownDeployment(
     workspaceRoot: string,
     redisPublisher?: Redis
 ): Promise<TeardownResult> {
+    const resolvedRoot = path.resolve(workspaceRoot);
+    const deploymentWorkspace = path.resolve(resolvedRoot, deploymentId);
+    const relative = path.relative(resolvedRoot, deploymentWorkspace);
+    if (!/^[a-zA-Z0-9_-]+$/.test(deploymentId) || !relative ||
+        path.isAbsolute(relative) || relative.split(path.sep).includes('..')) {
+        return { success: false, error: 'Invalid deployment workspace',
+            containerRemoved: false, routeRemoved: false, diskCleaned: false };
+    }
     const deployment = dbService.getDeployment(deploymentId);
     if (!deployment) {
         return {
@@ -70,7 +78,6 @@ export async function teardownDeployment(
 
     // 4. Remove workspace artifacts on disk
     try {
-        const deploymentWorkspace = path.join(workspaceRoot, deploymentId);
         if (fs.existsSync(deploymentWorkspace)) {
             fs.rmSync(deploymentWorkspace, { recursive: true, force: true });
             diskCleaned = true;

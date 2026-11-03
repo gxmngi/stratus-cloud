@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -549,6 +550,13 @@ func (p *ProxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Internal Control Plane API
 	if strings.HasPrefix(r.URL.Path, "/_internal/routes") {
+		token := os.Getenv("PROXY_CONTROL_TOKEN")
+		authorization := r.Header.Get("Authorization")
+		if token == "" || !strings.HasPrefix(authorization, "Bearer ") ||
+			subtle.ConstantTimeCompare([]byte(strings.TrimPrefix(authorization, "Bearer ")), []byte(token)) != 1 {
+			http.NotFound(w, r)
+			return
+		}
 		p.handleInternalRoutes(w, r)
 		return
 	}
@@ -703,7 +711,7 @@ func main() {
 	// โหมด Local (ไม่มี TLS_DOMAINS): ทำงานแบบ HTTP ตัวเดิมทุกประการ
 	tlsDomains := strings.TrimSpace(os.Getenv("TLS_DOMAINS"))
 	if tlsDomains == "" {
-		if err := newHTTPServer(":"+port, handler).ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := newHTTPServer(net.JoinHostPort(os.Getenv("PROXY_HOST"), port), handler).ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("[FATAL] Proxy server crashed: %v", err)
 		}
 		return

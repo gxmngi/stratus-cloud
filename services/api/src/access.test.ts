@@ -26,7 +26,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     const subscribers: EventEmitter[] = [];
     const publisher = {
         xadd: async () => { calls.push('queue'); return '1-0'; },
-        rpush: async () => 1,
+        rpush: async () => { throw new Error('Jobs must not be duplicated into the legacy queue'); },
     } as unknown as Redis;
     const request = (route: string, cookie?: string, method = 'GET', body?: unknown, source = origin) => fetch(base + route, {
         method, headers: { Origin: source, ...(cookie ? { Cookie: cookie } : {}), 'Content-Type': 'application/json' },
@@ -277,5 +277,21 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             db.prepare('UPDATE sessions SET created_at = 1, expires_at = 2 WHERE user_id = ?').run('alice');
             assert.equal(await closed, 1008);
         } finally { ws.terminate(); }
+    });
+
+    test('queue outages return 503 and do not leave a deployment stuck as queued', async () => {
+        const original = publisher.xadd;
+        publisher.xadd = async () => { throw new Error('test transport unavailable'); };
+        try {
+            const cookie = `stratus_session=${createSession('bob').token}`;
+            const response = await request('/api/deploy', cookie, 'POST', { gitUrl: 'fixtures/queue-unavailable' });
+            assert.equal(response.status, 503);
+            const payload = await response.json();
+            assert.equal(payload.details, undefined);
+            const deployment = db.prepare('SELECT status, error_message FROM deployments WHERE git_url = ?')
+                .get('fixtures/queue-unavailable') as { status: string; error_message: string };
+            assert.equal(deployment.status, 'FAILED');
+            assert.match(deployment.error_message, /could not be queued/);
+        } finally { publisher.xadd = original; }
     });
 });
