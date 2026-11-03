@@ -150,6 +150,8 @@ func TestServeArtifactAndPathTraversalProtection(t *testing.T) {
 }
 
 func TestDynamicContainerReverseProxy(t *testing.T) {
+	// The mock upstream listens on loopback, regardless of Docker DNS on this host.
+	t.Setenv("UPSTREAM_HOST", "127.0.0.1")
 	// 1. Create a mock dynamic upstream container server
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -191,6 +193,7 @@ func TestDynamicContainerReverseProxy(t *testing.T) {
 }
 
 func TestInMemoryRoutingAndInternalAPI(t *testing.T) {
+	t.Setenv("UPSTREAM_HOST", "127.0.0.1")
 	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)

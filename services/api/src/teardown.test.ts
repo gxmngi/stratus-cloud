@@ -6,7 +6,10 @@ import { teardownDeployment } from './teardown';
 import { initDatabase, dbService, db } from './db';
 
 test.describe('Deployment Teardown & Lifecycle GC', () => {
-    const testWorkspace = path.resolve(__dirname, '../../test-workspace');
+    const testWorkspace = process.env.TEST_WORKSPACE_DIR;
+    if (!testWorkspace) {
+        throw new Error('Run with npm test to configure an isolated test workspace');
+    }
 
     test.before(() => {
         initDatabase();

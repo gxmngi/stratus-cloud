@@ -182,6 +182,31 @@ Open [http://localhost:3000](http://localhost:3000) in your browser, enter any G
 
 ---
 
+## Running Tests
+
+Use Node.js 22 for the API and builder test suites, matching their CI jobs.
+Install dependencies with `npm ci` inside each service before the first run.
+
+```powershell
+cd services/api
+npm test
+
+cd ../builder
+npm test
+
+cd ../proxy
+go test ./...
+```
+
+The API test command configures a separate temporary SQLite database and workspace
+for each test process before loading application modules. These temporary files
+are removed after the tests. Use `npm test` so database tests do not use the
+application's normal data directory.
+
+GitHub Actions runs the API and builder suites alongside the dashboard build and
+Go proxy tests. These service tests do not cover the complete deployment flow;
+end-to-end deployment tests are a separate next step.
+
 ## License
 
 Distributed under the [MIT License](LICENSE). Maintained by [Rusdan Lamsa (@gxmngi)](https://github.com/gxmngi).
