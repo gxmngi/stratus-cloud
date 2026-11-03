@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
+import { API_URL, apiFetch } from "@/lib/api";
 import { 
   ExternalLink, 
   Play, 
@@ -26,7 +27,6 @@ import {
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
 const Terminal = dynamic(() => import("@/components/Terminal"), { ssr: false });
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 interface ContainerMetrics {
   deploymentId: string;
@@ -81,8 +81,9 @@ export default function Home() {
   const handlePromote = async (deploymentId: string) => {
     setIsPromoting(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/promote`, {
+      const res = await apiFetch(`${API_URL}/api/deployments/${deploymentId}/promote`, {
         method: "POST",
+        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -104,8 +105,9 @@ export default function Home() {
     }
     setIsDeleting(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}`, {
+      const res = await apiFetch(`${API_URL}/api/deployments/${deploymentId}`, {
         method: "DELETE",
+        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -126,8 +128,9 @@ export default function Home() {
     }
     setIsRollingBack(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/rollback`, {
+      const res = await apiFetch(`${API_URL}/api/deployments/${deploymentId}/rollback`, {
         method: "POST",
+        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -143,7 +146,7 @@ export default function Home() {
 
   const fetchDeployments = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/deployments?limit=20`);
+      const res = await apiFetch(`${API_URL}/api/deployments?limit=20`, { credentials: "include" });
       if (res.ok) {
         const data = await res.json();
         const list: DeploymentItem[] = data.deployments || [];
@@ -215,8 +218,9 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/deploy`, {
+      const response = await apiFetch(`${API_URL}/api/deploy`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           gitUrl,
@@ -250,7 +254,7 @@ export default function Home() {
     let isMounted = true;
     const fetchMetrics = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/deployments/${activeDeploymentId}/stats`);
+        const res = await apiFetch(`${API_URL}/api/deployments/${activeDeploymentId}/stats`, { credentials: "include" });
         if (res.ok && isMounted) {
           const data = await res.json();
           setMetrics(data.metrics);

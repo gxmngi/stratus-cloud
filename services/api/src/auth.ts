@@ -3,12 +3,13 @@ import { rateLimit } from 'express-rate-limit';
 import { db } from './db';
 import { createUser, createSession, getSessionUser, revokeSession, SESSION_TTL_MS } from './auth-store';
 import { verifyPassword } from './password';
+import type { IncomingMessage } from 'node:http';
 
 const COOKIE_NAME = 'stratus_session';
 // Unknown accounts still perform the same expensive password derivation.
 const DUMMY_HASH = `scrypt-v1$${'0'.repeat(32)}$${'0'.repeat(128)}`;
 
-export function readSessionToken(req: Request): string | undefined {
+export function readSessionToken(req: Pick<IncomingMessage, 'headers'>): string | undefined {
     const matches = (req.headers.cookie || '').split(';')
         .map(part => part.trim()).filter(part => part.startsWith(`${COOKIE_NAME}=`));
     if (matches.length !== 1) return undefined;

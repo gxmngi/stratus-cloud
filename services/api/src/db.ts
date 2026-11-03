@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { addProjectOwnership } from './ownership-schema';
+import { randomUUID } from 'node:crypto';
 
 const DB_DIR = process.env.DATA_DIR 
     ? path.resolve(process.env.DATA_DIR)
@@ -41,7 +43,8 @@ export function initDatabase() {
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             slug TEXT UNIQUE,
-            git_url TEXT NOT NULL UNIQUE,
+            git_url TEXT NOT NULL,
+            owner_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
             production_deployment_id TEXT,
             previous_production_deployment_id TEXT,
             created_at INTEGER NOT NULL,
@@ -88,11 +91,13 @@ export function initDatabase() {
     try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
+    addProjectOwnership(db);
     console.log(`[DB] SQLite initialized at: ${DB_FILE}`);
 }
 
 export interface ProjectRecord {
     id: string;
+    owner_id?: string | null;
     name: string;
     slug: string;
     git_url: string;
@@ -130,7 +135,7 @@ export interface LogRecord {
 
 export const dbService = {
     getOrCreateProject(gitUrl: string): ProjectRecord {
-        const existing = db.prepare('SELECT * FROM projects WHERE git_url = ?').get(gitUrl) as ProjectRecord | undefined;
+        const existing = db.prepare('SELECT * FROM projects WHERE git_url = ? AND owner_id IS NULL').get(gitUrl) as ProjectRecord | undefined;
         if (existing) {
             if (!existing.slug) {
                 const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
@@ -149,10 +154,10 @@ export const dbService = {
         let slug = rawSlug;
         const conflict = db.prepare('SELECT id FROM projects WHERE slug = ?').get(slug);
         if (conflict) {
-            slug = `${rawSlug}-${Date.now().toString(36).slice(-4)}`;
+            slug = `${rawSlug}-${randomUUID()}`;
         }
 
-        const id = `proj-${slug}-${Date.now().toString(36)}`;
+        const id = `proj-${randomUUID()}`;
         const now = Date.now();
 
         db.prepare(`

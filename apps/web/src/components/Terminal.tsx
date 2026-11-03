@@ -3,9 +3,8 @@
 import { useEffect, useRef } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
+import { API_URL, apiFetch, logStreamUrl } from "@/lib/api";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
-const WS_URL = API_URL.replace(/^http/, "ws");
 
 interface TerminalProps {
   deploymentId: string;
@@ -57,8 +56,11 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
     let ws: WebSocket | null = null;
 
     // 1. Fetch persisted logs from SQLite first (Instant Log Replay)
-    fetch(`${API_URL}/api/deployments/${deploymentId}/logs`)
-      .then((res) => (res.ok ? res.json() : { logs: [] }))
+    apiFetch(`${API_URL}/api/deployments/${deploymentId}/logs`)
+      .then((res) => {
+        if (!res.ok) throw new Error(res.status === 401 ? "Sign in to view deployment logs" : "Logs unavailable");
+        return res.json();
+      })
       .then((data: { logs: string[] }) => {
         if (!isSubscribed) return;
 
@@ -71,7 +73,7 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         }
 
         // 2. Connect to live WebSocket stream
-        ws = new WebSocket(`${WS_URL}/logs?deploymentId=${deploymentId}`);
+        ws = new WebSocket(logStreamUrl(deploymentId));
 
         ws.onopen = () => {
           term.writeln("\x1b[32m[CONNECTED]\x1b[0m Live WebSocket stream connected to Redis Pub/Sub.\n");
@@ -98,6 +100,7 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         };
       })
       .catch((err) => {
+        if (isSubscribed) term.writeln(`\r\n[STRATUS] ${err instanceof Error ? err.message : "Logs unavailable"}`);
         console.error("Failed to fetch historical logs:", err);
       });
 

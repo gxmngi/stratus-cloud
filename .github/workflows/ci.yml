@@ -32,6 +32,10 @@ jobs:
       - name: Run test suite
         run: npm test
 
+      - name: Check API types
+        if: matrix.service == 'api'
+        run: npm run typecheck
+
   web:
     name: Build Next.js Dashboard
     runs-on: ubuntu-latest

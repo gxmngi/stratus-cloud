@@ -184,6 +184,9 @@ Open [http://localhost:3000](http://localhost:3000) in your browser, enter any G
 
 ## Running Tests
 
+For authentication setup, development accounts, existing-data migration and the
+login UI contract, see [Authentication readiness](docs/auth-readiness.md).
+
 Use Node.js 22 for the API and builder test suites, matching their CI jobs.
 Install dependencies with `npm ci` inside each service before the first run.
 
