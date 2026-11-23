@@ -1,10 +1,13 @@
 // เก็บค่า Secret ต่อ Deployment เพื่อ Mask ก่อนส่ง Log ออก (ไม่ให้หลุดไปหน้า Web Terminal)
 const secretsByDeployment = new Map<string, string[]>();
 
+function sortSecrets(values: string[]): string[] {
+    return [...new Set(values)].sort((a, b) => b.length - a.length);
+}
+
 export function setSecretMasker(deploymentId: string, values: string[]): void {
     // เรียงจากยาวไปสั้น ป้องกันค่าสั้นที่เป็นส่วนของค่ายาวถูกแทนก่อน
-    const sorted = [...new Set(values)].sort((a, b) => b.length - a.length);
-    secretsByDeployment.set(deploymentId, sorted);
+    secretsByDeployment.set(deploymentId, sortSecrets(values));
 }
 
 export function clearSecretMasker(deploymentId: string): void {
@@ -14,8 +17,8 @@ export function clearSecretMasker(deploymentId: string): void {
 /**
  * แทนค่า Secret ทุกตัวด้วย *** (รวมทั้ง Base64 ของค่านั้นด้วย เพื่อกันการ echo แบบ encode)
  */
-export function maskSecrets(deploymentId: string, message: string): string {
-    const secrets = secretsByDeployment.get(deploymentId);
+export function maskSecrets(deploymentId: string, message: string, values?: string[]): string {
+    const secrets = values ? sortSecrets(values) : secretsByDeployment.get(deploymentId);
     if (!secrets || secrets.length === 0) return message;
 
     let masked = message;

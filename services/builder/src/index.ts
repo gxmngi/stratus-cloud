@@ -2,6 +2,9 @@ import Redis from 'ioredis';
 import crypto from 'crypto';
 import { runBuild, BuildOptions } from './builder';
 import { postCommitStatus, WebhookMeta } from './github';
+import { BuildWorker } from './worker';
+import { cleanupInterruptedBuild } from './recovery';
+import { publishBuildResult } from './result';
 
 const redisConsumer = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -16,6 +19,7 @@ const lifecycleRedis = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
     port: Number(process.env.REDIS_PORT) || 6379,
 });
+lifecycleRedis.on('error', (err: Error) => console.error('[REDIS] Lifecycle connection error:', err.message));
 async function startLifecycleSubscriber() {
     await lifecycleRedis.subscribe('stratus:scale');
     console.log('[SCALE-TO-ZERO] Subscribed to lifecycle events on "stratus:scale"');
@@ -47,118 +51,49 @@ async function startLifecycleSubscriber() {
 startLifecycleSubscriber();
 // ----------------------------------------
 
-const STREAM_KEY = 'stream:build';
-const GROUP_NAME = 'builder-group';
-const CONSUMER_NAME = `worker-${process.pid}-${crypto.randomBytes(3).toString('hex')}`;
-
-async function initConsumerGroup() {
-    try {
-        await redisConsumer.xgroup('CREATE', STREAM_KEY, GROUP_NAME, '$', 'MKSTREAM');
-        console.log(`[REDIS] Initialized stream consumer group: "${GROUP_NAME}" on "${STREAM_KEY}"`);
-    } catch (err: unknown) {
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        if (!errorMsg.includes('BUSYGROUP')) {
-            console.error('[REDIS] Error creating consumer group:', errorMsg);
+const control = redisConsumer.duplicate({ enableOfflineQueue: false, maxRetriesPerRequest: 1, commandTimeout: 5000 });
+control.on('error', error => console.error('[REDIS] Worker control error:', error.message));
+function positiveSetting(name: string, fallback: number): number {
+    const value = Number(process.env[name] || fallback);
+    if (!Number.isInteger(value) || value <= 0) throw new Error(`Invalid ${name}`);
+    return value;
+}
+const worker = new BuildWorker(redisConsumer, control, {
+    stream: process.env.BUILD_STREAM || 'stream:build',
+    group: process.env.BUILD_GROUP || 'builder-group',
+    consumer: `worker-${process.pid}-${crypto.randomBytes(3).toString('hex')}`,
+    namespace: process.env.BUILD_NAMESPACE || 'stratus:build',
+    leaseMs: positiveSetting('BUILD_LEASE_MS', 30000),
+    claimIdleMs: positiveSetting('BUILD_CLAIM_IDLE_MS', 60000),
+    recoveryIntervalMs: positiveSetting('BUILD_RECOVERY_INTERVAL_MS', 5000),
+    maxAttempts: positiveSetting('BUILD_MAX_ATTEMPTS', 3),
+}, {
+    build: async (job, assertLease) => {
+        const meta = job as BuildOptions & Partial<WebhookMeta>;
+        if (meta.repository && meta.commitSha) {
+            await postCommitStatus(meta.repository, meta.commitSha, 'pending', 'Stratus build running').catch(() => {});
         }
-    }
-}
-
-async function processJob(jobPayload: string): Promise<boolean> {
-    const job: BuildOptions & Partial<WebhookMeta> = JSON.parse(jobPayload);
-    console.log(`\n[WORKER] Picked up job for deployment: ${job.deploymentId}`);
-
-    const hasStatus = job.repository && job.commitSha;
-    if (hasStatus) {
-        await postCommitStatus(job.repository!, job.commitSha!, 'pending', 'Stratus build running').catch(() => {});
-    }
-
-    const buildResult = await runBuild(job);
-    console.log(`[WORKER] Completed job for ${job.deploymentId} (Success: ${buildResult.success})`);
-
-    if (hasStatus) {
-        await postCommitStatus(
-            job.repository!,
-            job.commitSha!,
-            buildResult.success ? 'success' : 'failure',
-            buildResult.success ? 'Stratus build succeeded' : 'Stratus build failed',
-        ).catch(() => {});
-    }
-
-    return buildResult.success;
-}
-
+        return runBuild(job, assertLease);
+    },
+    cleanup: cleanupInterruptedBuild,
+    deliver: (job, result) => publishBuildResult(control, job, result),
+    leaseLost: () => {
+        console.error('[FATAL] Build lease lost; stopping to avoid concurrent mutations.');
+        process.exit(1);
+    },
+});
 async function startWorker() {
-    console.log(`[INFO] Stratus Resilient Builder Worker Daemon started [Consumer: ${CONSUMER_NAME}]`);
-    await initConsumerGroup();
-
-    // Check for orphaned pending messages on startup (crash recovery)
-    try {
-        const pending = await redisConsumer.xautoclaim(
-            STREAM_KEY,
-            GROUP_NAME,
-            CONSUMER_NAME,
-            60000, // 60s idle threshold
-            '0-0',
-            'COUNT',
-            5
-        );
-        if (pending && Array.isArray(pending[1])) {
-            for (const item of pending[1] as any[]) {
-                const [id, fields] = item as [string, string[]];
-                const jobFieldIdx = fields.indexOf('job');
-                if (jobFieldIdx !== -1) {
-                    console.log(`[RECOVERY] Reclaimed orphaned pending build job ${id}`);
-                    await processJob(fields[jobFieldIdx + 1]);
-                    await redisConsumer.xack(STREAM_KEY, GROUP_NAME, id);
-                }
-            }
-        }
-    } catch {
-        // Stream empty or non-existent yet
-    }
-
-    console.log(`[INFO] Listening for deployment jobs from Redis stream "${STREAM_KEY}" & queue "queue:build"...`);
-
+    await worker.initialize();
+    console.log(`[INFO] Builder ready [Consumer: ${worker.options.consumer}]`);
     while (true) {
-        try {
-            // 1. Try reading from Redis Stream (At-least-once guaranteed delivery)
-            const streamRes = await (redisConsumer as any).xreadgroup(
-                'GROUP', GROUP_NAME, CONSUMER_NAME,
-                'BLOCK', 2000,
-                'COUNT', 1,
-                'STREAMS', STREAM_KEY, '>'
-            ) as any;
-
-            if (streamRes && streamRes.length > 0) {
-                const [, messages] = streamRes[0];
-                for (const [id, fields] of messages) {
-                    const jobFieldIdx = fields.indexOf('job');
-                    if (jobFieldIdx !== -1) {
-                        const payload = fields[jobFieldIdx + 1];
-                        try {
-                            await processJob(payload);
-                        } finally {
-                            // Acknowledge message upon processing completion to prevent message loss
-                            await redisConsumer.xack(STREAM_KEY, GROUP_NAME, id);
-                        }
-                    }
-                }
-                continue;
-            }
-
-            // 2. Fallback check for legacy queue:build items (backward-compatible)
-            const legacyItem = await redisConsumer.rpop('queue:build');
-            if (legacyItem) {
-                await processJob(legacyItem);
-            }
-        } catch (err) {
-            console.error('[FATAL] Worker loop error:', err);
-            await new Promise((resolve) => setTimeout(resolve, 1000));
+        try { await worker.tick(); }
+        catch (error) {
+            console.error('[WORKER] Job remains pending for recovery:', error instanceof Error ? error.message : String(error));
+            await new Promise(resolve => setTimeout(resolve, 1000));
         }
     }
 }
-
-startWorker().catch((err) => {
-    console.error('[FATAL] Builder worker crashed:', err);
+startWorker().catch(error => {
+    console.error('[FATAL] Builder worker crashed:', error);
     process.exit(1);
 });

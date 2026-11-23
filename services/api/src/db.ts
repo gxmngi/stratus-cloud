@@ -1,6 +1,8 @@
 import Database from 'better-sqlite3';
 import path from 'path';
 import fs from 'fs';
+import { addProjectOwnership } from './ownership-schema';
+import { randomUUID } from 'node:crypto';
 
 const DB_DIR = process.env.DATA_DIR 
     ? path.resolve(process.env.DATA_DIR)
@@ -20,11 +22,29 @@ db.pragma('foreign_keys = ON');
 
 export function initDatabase() {
     db.exec(`
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE,
+            password_hash TEXT NOT NULL,
+            created_at INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS sessions (
+            token_hash TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL CHECK (expires_at > created_at)
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+        CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
+
         CREATE TABLE IF NOT EXISTS projects (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
             slug TEXT UNIQUE,
-            git_url TEXT NOT NULL UNIQUE,
+            git_url TEXT NOT NULL,
+            owner_id TEXT REFERENCES users(id) ON DELETE RESTRICT,
             production_deployment_id TEXT,
             previous_production_deployment_id TEXT,
             created_at INTEGER NOT NULL,
@@ -61,6 +81,8 @@ export function initDatabase() {
 
         CREATE INDEX IF NOT EXISTS idx_deployments_created_at ON deployments(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
+        CREATE INDEX IF NOT EXISTS idx_deployments_pending ON deployments(id)
+            WHERE status IN ('QUEUED', 'BUILDING');
         CREATE INDEX IF NOT EXISTS idx_logs_deployment_id ON deployment_logs(deployment_id, id ASC);
     `);
 
@@ -71,11 +93,13 @@ export function initDatabase() {
     try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
+    addProjectOwnership(db);
     console.log(`[DB] SQLite initialized at: ${DB_FILE}`);
 }
 
 export interface ProjectRecord {
     id: string;
+    owner_id?: string | null;
     name: string;
     slug: string;
     git_url: string;
@@ -111,12 +135,18 @@ export interface LogRecord {
     created_at: number;
 }
 
+export type DeploymentBuildOutcome = (
+    | { status: 'READY'; runtimeType: 'static'; port: null }
+    | { status: 'READY'; runtimeType: 'dynamic'; port: number }
+    | { status: 'FAILED'; error: string }
+) & { completedAt?: number };
+
 export const dbService = {
     getOrCreateProject(gitUrl: string): ProjectRecord {
-        const existing = db.prepare('SELECT * FROM projects WHERE git_url = ?').get(gitUrl) as ProjectRecord | undefined;
+        const existing = db.prepare('SELECT * FROM projects WHERE git_url = ? AND owner_id IS NULL').get(gitUrl) as ProjectRecord | undefined;
         if (existing) {
             if (!existing.slug) {
-                const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
+                const parts = gitUrl.replace(/\.git$/, '').split(/[\\/]/);
                 const name = parts[parts.length - 1] || 'unnamed-project';
                 const slug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
                 db.prepare('UPDATE projects SET slug = ? WHERE id = ?').run(slug, existing.id);
@@ -126,16 +156,16 @@ export const dbService = {
         }
 
         // Derive name and clean slug from git URL
-        const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
+        const parts = gitUrl.replace(/\.git$/, '').split(/[\\/]/);
         const name = parts[parts.length - 1] || 'unnamed-project';
         const rawSlug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
         let slug = rawSlug;
         const conflict = db.prepare('SELECT id FROM projects WHERE slug = ?').get(slug);
         if (conflict) {
-            slug = `${rawSlug}-${Date.now().toString(36).slice(-4)}`;
+            slug = `${rawSlug}-${randomUUID()}`;
         }
 
-        const id = `proj-${slug}-${Date.now().toString(36)}`;
+        const id = `proj-${randomUUID()}`;
         const now = Date.now();
 
         db.prepare(`
@@ -252,12 +282,35 @@ export const dbService = {
         `).run(payload);
     },
 
-    updateDeploymentRuntime(id: string, runtimeType: 'static' | 'dynamic', port?: number): void {
-        db.prepare(`
-            UPDATE deployments 
-            SET runtime_type = ?, container_port = ?
-            WHERE id = ?
-        `).run(runtimeType, port || null, id);
+    getPendingDeploymentIds(afterId: string, limit: number): string[] {
+        return (db.prepare(`
+            SELECT id FROM deployments
+            WHERE id > ? AND status IN ('QUEUED', 'BUILDING')
+            ORDER BY id LIMIT ?
+        `).all(afterId, limit) as Pick<DeploymentRecord, 'id'>[]).map(row => row.id);
+    },
+
+    completeDeploymentBuild(id: string, outcome: DeploymentBuildOutcome):
+        { slug: string; deployment: DeploymentRecord } | undefined {
+        return db.transaction(() => {
+            const now = Date.now();
+            const completedAt = outcome.completedAt ?? now;
+            const ready = outcome.status === 'READY';
+            const deployment = db.prepare(`
+                UPDATE deployments SET status = ?, runtime_type = COALESCE(?, runtime_type),
+                    container_port = ?, error_message = ?, completed_at = ?, duration_ms = MAX(0, ? - created_at)
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING') RETURNING *
+            `).get(outcome.status, ready ? outcome.runtimeType : null, ready ? outcome.port : null,
+                ready ? null : outcome.error, completedAt, completedAt, id) as DeploymentRecord | undefined;
+            if (!ready || !deployment?.project_id) return;
+
+            const promotion = db.prepare(`
+                UPDATE projects SET production_deployment_id = ?, updated_at = ?
+                WHERE id = ? AND (production_deployment_id IS NULL OR production_deployment_id = '')
+                RETURNING slug
+            `).get(id, now, deployment.project_id) as Pick<ProjectRecord, 'slug'> | undefined;
+            if (promotion) return { ...promotion, deployment };
+        })();
     },
 
     updateDeploymentStatus(
@@ -273,13 +326,13 @@ export const dbService = {
             db.prepare(`
                 UPDATE deployments 
                 SET status = ?, error_message = ?, completed_at = ?, duration_ms = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING')
             `).run(status, error || null, now, durationMs, id);
         } else {
             db.prepare(`
                 UPDATE deployments 
                 SET status = ?
-                WHERE id = ?
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING')
             `).run(status, id);
         }
     },

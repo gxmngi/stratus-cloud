@@ -2,31 +2,42 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
-import { 
-  ExternalLink, 
-  Play, 
-  CheckCircle2, 
-  AlertCircle, 
-  Loader2, 
-  Layers, 
-  ChevronDown, 
-  ChevronRight, 
-  Plus, 
+import Link from "next/link";
+import { API_URL, apiFetch } from "@/lib/api";
+import { useAuth } from "@/components/auth/AuthProvider";
+import { ProtectedWorkspace } from "@/components/auth/ProtectedWorkspace";
+import {
+  ArrowUpRight,
+  Search,
+  GitBranch,
+  Box,
+  Globe2,
+  BookOpen,
+  Code2,
+  LogOut,
+  Command,
+  LayoutGrid,
+  ExternalLink,
+  Play,
+  CheckCircle2,
+  AlertCircle,
+  Loader2,
+  ChevronDown,
+  Plus,
   Trash2,
-  Clock,
-  History,
   RotateCw,
   RotateCcw,
   Cpu,
   HardDrive,
   Activity,
-  Wifi
+  Wifi,
+  X,
 } from "lucide-react";
+import { Brand } from "@/components/Brand";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 // โหลด Terminal แบบ dynamic ปิด SSR เพราะ xterm ต้องรันบน Client Browser
 const Terminal = dynamic(() => import("@/components/Terminal"), { ssr: false });
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
 interface ContainerMetrics {
   deploymentId: string;
@@ -65,32 +76,75 @@ interface DeploymentItem {
 }
 
 export default function Home() {
+  const { user } = useAuth();
+  return (
+    <ProtectedWorkspace>
+      {user && <Dashboard key={user.id} />}
+    </ProtectedWorkspace>
+  );
+}
+
+function Dashboard() {
+  const { user, signOut } = useAuth();
+  const [signingOut, setSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState("");
+  async function handleSignOut() {
+    if (signingOut) return;
+    setSigningOut(true);
+    setSignOutError("");
+    try {
+      await signOut();
+    } catch {
+      setSignOutError(
+        "Couldn’t sign out. Check your connection and try again.",
+      );
+    } finally {
+      setSigningOut(false);
+    }
+  }
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("All deployments");
+  const [notice, setNotice] = useState("");
+  const [loadError, setLoadError] = useState("");
+  const [confirmation, setConfirmation] = useState<
+    { action: "delete" | "rollback"; deploymentId: string } | null
+  >(null);
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
-  const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(null);
-  const [metrics, setMetrics] = useState<ContainerMetrics | null>(null);
+  const [activeDeploymentId, setActiveDeploymentId] = useState<string | null>(
+    null,
+  );
+  const [storedMetrics, setMetrics] = useState<ContainerMetrics | null>(null);
+  const metrics =
+    storedMetrics?.deploymentId === activeDeploymentId ? storedMetrics : null;
   const [deployments, setDeployments] = useState<DeploymentItem[]>([]);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const [showEnv, setShowEnv] = useState(false);
-  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>([
-    { key: "", value: "" },
-  ]);
+  const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
+    [{ key: "", value: "" }],
+  );
 
   const handlePromote = async (deploymentId: string) => {
     setIsPromoting(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/promote`, {
-        method: "POST",
-      });
+      const res = await apiFetch(
+        `${API_URL}/api/deployments/${deploymentId}/promote`,
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to promote deployment");
       }
       await fetchDeployments();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Error promoting deployment");
+      setNotice(
+        err instanceof Error ? err.message : "Error promoting deployment",
+      );
     } finally {
       setIsPromoting(false);
     }
@@ -99,43 +153,48 @@ export default function Home() {
   const [isDeleting, setIsDeleting] = useState(false);
 
   const handleDelete = async (deploymentId: string) => {
-    if (!confirm(`Are you sure you want to teardown and permanently delete deployment "${deploymentId}"? This will stop its container, remove artifacts, and purge logs.`)) {
-      return;
-    }
     setIsDeleting(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}`, {
+      const res = await apiFetch(`${API_URL}/api/deployments/${deploymentId}`, {
         method: "DELETE",
+        credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to delete deployment");
       }
-      setActiveDeploymentId(null);
+      setActiveDeploymentId((current) =>
+        current === deploymentId ? null : current,
+      );
       await fetchDeployments();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Error deleting deployment");
+      setNotice(
+        err instanceof Error ? err.message : "Error deleting deployment",
+      );
     } finally {
       setIsDeleting(false);
     }
   };
 
   const handleRollback = async (deploymentId: string) => {
-    if (!confirm("Are you sure you want to rollback production traffic to the previous deployment?")) {
-      return;
-    }
     setIsRollingBack(true);
     try {
-      const res = await fetch(`${API_URL}/api/deployments/${deploymentId}/rollback`, {
-        method: "POST",
-      });
+      const res = await apiFetch(
+        `${API_URL}/api/deployments/${deploymentId}/rollback`,
+        {
+          method: "POST",
+          credentials: "include",
+        },
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to rollback deployment");
       }
       await fetchDeployments();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Error rolling back deployment");
+      setNotice(
+        err instanceof Error ? err.message : "Error rolling back deployment",
+      );
     } finally {
       setIsRollingBack(false);
     }
@@ -143,9 +202,12 @@ export default function Home() {
 
   const fetchDeployments = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/deployments?limit=20`);
+      const res = await apiFetch(`${API_URL}/api/deployments?limit=20`, {
+        credentials: "include",
+      });
       if (res.ok) {
         const data = await res.json();
+        setLoadError("");
         const list: DeploymentItem[] = data.deployments || [];
         setDeployments(list);
 
@@ -154,10 +216,17 @@ export default function Home() {
           if (!current && list.length > 0) {
             return list[0].id;
           }
-          return current;
+          return list.some((d) => d.id === current)
+            ? current
+            : (list[0]?.id ?? null);
         });
+      } else {
+        setLoadError("Couldn’t load deployments. Please refresh to try again.");
       }
     } catch (err) {
+      setLoadError(
+        "Couldn’t load deployments. Check your connection and refresh.",
+      );
       console.error("Failed to load deployment history:", err);
     } finally {
       setIsLoadingHistory(false);
@@ -169,11 +238,16 @@ export default function Home() {
   }, [fetchDeployments]);
 
   // Active deployment data derived from list or fallback
-  const activeDeployment = deployments.find((d) => d.id === activeDeploymentId) || null;
+  const activeDeployment =
+    deployments.find((d) => d.id === activeDeploymentId) || null;
 
   // Poll status while active deployment is pending
   useEffect(() => {
-    if (!activeDeployment || activeDeployment.status === "READY" || activeDeployment.status === "FAILED") {
+    if (
+      !activeDeployment ||
+      activeDeployment.status === "READY" ||
+      activeDeployment.status === "FAILED"
+    ) {
       return;
     }
 
@@ -192,7 +266,11 @@ export default function Home() {
     setEnvVars((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const handleUpdateEnv = (index: number, field: "key" | "value", val: string) => {
+  const handleUpdateEnv = (
+    index: number,
+    field: "key" | "value",
+    val: string,
+  ) => {
     setEnvVars((prev) => {
       const next = [...prev];
       next[index] = { ...next[index], [field]: val };
@@ -215,10 +293,11 @@ export default function Home() {
     }
 
     try {
-      const response = await fetch(`${API_URL}/api/deploy`, {
+      const response = await apiFetch(`${API_URL}/api/deploy`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           gitUrl,
           env: Object.keys(envPayload).length > 0 ? envPayload : undefined,
         }),
@@ -226,7 +305,11 @@ export default function Home() {
 
       if (!response.ok) {
         const errJson = await response.json().catch(() => ({}));
-        throw new Error(errJson.details || `Deployment failed with status ${response.status}`);
+        throw new Error(
+          errJson.error ||
+            errJson.details ||
+            `Deployment failed with status ${response.status}`,
+        );
       }
 
       const data = await response.json();
@@ -234,7 +317,11 @@ export default function Home() {
       await fetchDeployments();
     } catch (err) {
       console.error(err);
-      alert(err instanceof Error ? err.message : `Failed to connect to API server at ${API_URL}`);
+      setNotice(
+        err instanceof Error
+          ? err.message
+          : `Failed to connect to API server at ${API_URL}`,
+      );
     } finally {
       setIsDeploying(false);
     }
@@ -243,14 +330,16 @@ export default function Home() {
   // Poll container metrics when active deployment is selected
   useEffect(() => {
     if (!activeDeploymentId) {
-      setMetrics(null);
       return;
     }
 
     let isMounted = true;
     const fetchMetrics = async () => {
       try {
-        const res = await fetch(`${API_URL}/api/deployments/${activeDeploymentId}/stats`);
+        const res = await apiFetch(
+          `${API_URL}/api/deployments/${activeDeploymentId}/stats`,
+          { credentials: "include" },
+        );
         if (res.ok && isMounted) {
           const data = await res.json();
           setMetrics(data.metrics);
@@ -291,445 +380,663 @@ export default function Home() {
 
   const formatTime = (ts: number) => {
     const d = new Date(ts);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    return d.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   };
 
+  const visibleDeployments = deployments.filter(
+    (d) =>
+      (filter === "All deployments" ||
+        (filter === "Production" ? d.is_production : d.status === "FAILED")) &&
+      (d.id + d.git_url + (d.project_slug || ""))
+        .toLowerCase()
+        .includes(search.toLowerCase()),
+  );
+  const projectName = (d: DeploymentItem) =>
+    d.project_slug ||
+    d.git_url
+      .split("/")
+      .filter(Boolean)
+      .pop()
+      ?.replace(/\.git$/, "") ||
+    d.id;
+  const ready = deployments.filter((d) => d.status === "READY").length;
+  const inProgress = deployments.filter(
+    (d) => d.status === "BUILDING" || d.status === "QUEUED",
+  ).length;
+  const badge = (d: DeploymentItem) => (
+    <span className={"status-badge " + d.status.toLowerCase()}>
+      <span />
+      {d.status.charAt(0) + d.status.slice(1).toLowerCase()}
+    </span>
+  );
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-[#ededed] font-sans antialiased">
-      {/* Header Bar */}
-      <header className="border-b border-zinc-800 bg-[#0d0d0d] sticky top-0 z-50">
-        <div className="max-w-6xl mx-auto px-6 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-md bg-zinc-100 text-black flex items-center justify-center font-bold text-sm tracking-wider">
-              S
-            </div>
-            <div className="flex items-baseline gap-2">
-              <span className="font-semibold tracking-tight text-white">STRATUS</span>
-              <span className="text-xs text-zinc-500 font-mono">PaaS Platform</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
-              SYSTEM ONLINE
-            </span>
-            <span className="text-xs text-zinc-500 font-mono border border-zinc-800 px-2 py-0.5 rounded">
-              EDGE PORT 8000
-            </span>
+    <div className="workspace">
+      <a href="#workspace-main" className="skip-link">
+        Skip to workspace
+      </a>
+      <aside className="workspace-sidebar">
+        <Link href="/" className="brand-link" aria-label="Stratus home">
+          <Brand />
+        </Link>
+        <div className="workspace-switch">
+          <span className="avatar">{user?.email[0].toUpperCase()}</span>
+          <div>
+            <strong>Personal workspace</strong>
+            <span>Your deployment space</span>
           </div>
         </div>
-      </header>
-
-      {/* Main Container */}
-      <main className="max-w-6xl mx-auto px-6 py-10">
-        <div className="max-w-2xl mb-8">
-          <h1 className="text-3xl font-semibold tracking-tight text-white mb-2">
-            Deploy your web application
-          </h1>
-          <p className="text-sm text-zinc-400 leading-relaxed">
-            Stratus executes isolated Docker builds, persists deployment records in SQLite, streams live logs via Redis, and routes traffic on the Go edge proxy.
-          </p>
+        <nav aria-label="Workspace navigation">
+          <a href="#deployments" className="nav-link current">
+            <LayoutGrid size={17} /> Deployments{" "}
+            <span>{deployments.length}</span>
+          </a>
+          <a href="#new-deployment" className="nav-link">
+            <Plus size={17} /> New deployment
+          </a>
+        </nav>
+        <div className="sidebar-bottom">
+          <div className="sidebar-note">
+            <Brand symbolOnly />
+            <strong>A home for your next idea.</strong>
+            <p>From your first commit to your next release.</p>
+          </div>
+          <a
+            className="nav-link"
+            href="https://github.com/gxmngi/stratus-cloud/tree/main/docs"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <BookOpen size={17} /> Documentation <ArrowUpRight size={14} />
+          </a>
+          <a
+            className="nav-link"
+            href="https://github.com/gxmngi/stratus-cloud"
+            target="_blank"
+            rel="noreferrer"
+          >
+            <Code2 size={17} /> Source code <ArrowUpRight size={14} />
+          </a>
+          <div className="account">
+            <span className="avatar">{user?.email[0].toUpperCase()}</span>
+            <span title={user?.email}>{user?.email}</span>
+            <button
+              className="icon-button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              aria-label="Sign out"
+              title="Sign out"
+            >
+              {signingOut ? (
+                <Loader2 size={16} className="auth-spin" />
+              ) : (
+                <LogOut size={16} />
+              )}
+            </button>
+          </div>
         </div>
-
-        {/* Input Form Card */}
-        <div className="border border-zinc-800 bg-zinc-900/40 rounded-xl p-6 shadow-xl mb-10">
-          <form onSubmit={handleDeploy} className="space-y-4">
+      </aside>
+      <div className="workspace-body">
+        <header className="workspace-topbar">
+          <span className="breadcrumb">
+            Workspace <ChevronDown size={12} />
+            <strong>Deployments</strong>
+          </span>
+          <a
+            href="https://github.com/gxmngi/stratus-cloud"
+            target="_blank"
+            rel="noreferrer"
+            className="topbar-source"
+          >
+            <Code2 size={15} /> Open source <ArrowUpRight size={13} />
+          </a>
+          <button
+            className="mobile-signout"
+            onClick={handleSignOut}
+            disabled={signingOut}
+          >
+            Sign out
+          </button>
+        </header>
+        <main id="workspace-main" className="workspace-main">
+          <div className="page-heading">
             <div>
-              <label className="block text-xs font-mono uppercase tracking-wider text-zinc-400 mb-2">
-                Git Repository / Local Project Path
-              </label>
-              <div className="flex gap-3">
-                <input
-                  type="text"
-                  value={gitUrl}
-                  onChange={(e) => setGitUrl(e.target.value)}
-                  placeholder="https://github.com/user/repo or local fixture path"
-                  className="flex-1 bg-black border border-zinc-800 rounded-lg px-4 py-2.5 text-sm text-zinc-100 placeholder-zinc-600 focus:outline-none focus:border-zinc-500 font-mono"
-                  required
-                />
-                <button
-                  type="submit"
-                  disabled={isDeploying}
-                  className="inline-flex items-center gap-2 bg-white hover:bg-zinc-200 text-black px-5 py-2.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
-                >
-                  {isDeploying ? (
-                    <>
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Queuing...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4 fill-current" />
-                      Deploy
-                    </>
-                  )}
-                </button>
+              <p className="workspace-caption">Your cloud, in focus.</p>
+              <h1>Deployments</h1>
+              <p>Ship something great. We’ll give it a place to run.</p>
+            </div>
+            <a className="button primary" href="#new-deployment">
+              <Plus size={16} /> New deployment
+            </a>
+          </div>
+          {(notice || signOutError) && (
+            <div role="alert" className="workspace-alert">
+              <AlertCircle size={17} />
+              <span>{notice || signOutError}</span>
+              <button
+                className="icon-button"
+                aria-label="Dismiss message"
+                onClick={() => {
+                  setNotice("");
+                  setSignOutError("");
+                }}
+              >
+                <X size={16} />
+              </button>
+            </div>
+          )}
+          <section className="overview-strip" aria-label="Deployment summary">
+            <div>
+              <span className="summary-icon">
+                <Box size={18} />
+              </span>
+              <span>
+                Recent deployments
+                <strong>
+                  {deployments.length}
+                  <small>Latest 20 releases</small>
+                </strong>
+              </span>
+            </div>
+            <div>
+              <span className="summary-icon green">
+                <CheckCircle2 size={18} />
+              </span>
+              <span>
+                Ready
+                <strong>
+                  {ready}
+                  <small>Builds completed</small>
+                </strong>
+              </span>
+            </div>
+            <div>
+              <span className="summary-icon blue">
+                <Activity size={18} />
+              </span>
+              <span>
+                In progress
+                <strong>
+                  {inProgress}
+                  <small>Queued or building</small>
+                </strong>
+              </span>
+            </div>
+          </section>
+          <section
+            className="deploy-composer"
+            id="new-deployment"
+            aria-labelledby="composer-title"
+          >
+            <div className="composer-intro">
+              <span className="composer-icon">
+                <GitBranch size={20} />
+              </span>
+              <div>
+                <h2 id="composer-title">What are you building?</h2>
+                <p>Start with a Git repository or a local project.</p>
               </div>
             </div>
-
-            <div className="flex items-center gap-2 pt-1 text-xs text-zinc-500 font-mono">
-              <span>Quick Select:</span>
-              <button
-                type="button"
-                onClick={() => setGitUrl("fixtures/demo-app")}
-                className="text-zinc-400 hover:text-white underline decoration-zinc-700 underline-offset-2 cursor-pointer"
-              >
-                Static App (fixtures/demo-app)
-              </button>
-              <span>•</span>
-              <button
-                type="button"
-                onClick={() => setGitUrl("fixtures/demo-server")}
-                className="text-purple-400 hover:text-purple-300 underline decoration-purple-800 underline-offset-2 cursor-pointer"
-              >
-                Dynamic Server (fixtures/demo-server)
-              </button>
-            </div>
-
-            {/* Collapsible Environment Variables Section */}
-            <div className="pt-3 border-t border-zinc-800/80">
-              <button
-                type="button"
-                onClick={() => setShowEnv(!showEnv)}
-                className="inline-flex items-center gap-2 text-xs font-mono text-zinc-400 hover:text-zinc-200 transition-colors cursor-pointer"
-              >
-                {showEnv ? (
-                  <ChevronDown className="w-3.5 h-3.5" />
-                ) : (
-                  <ChevronRight className="w-3.5 h-3.5" />
-                )}
-                <span>Environment Variables (.env)</span>
-                {envVars.filter((v) => v.key.trim()).length > 0 && (
-                  <span className="px-1.5 py-0.5 text-[10px] rounded bg-zinc-800 text-emerald-400 border border-zinc-700 font-mono">
-                    {envVars.filter((v) => v.key.trim()).length} configured
-                  </span>
-                )}
-              </button>
-
+            <form onSubmit={handleDeploy}>
+              <label className="sr-only" htmlFor="git-repository">
+                Git repository or local project path
+              </label>
+              <div className="repository-field">
+                <GitBranch size={17} />
+                <input
+                  id="git-repository"
+                  value={gitUrl}
+                  onChange={(e) => setGitUrl(e.target.value)}
+                  required
+                  placeholder="https://github.com/you/project"
+                />
+                <button
+                  className="button primary"
+                  type="submit"
+                  disabled={isDeploying}
+                >
+                  {isDeploying ? (
+                    <Loader2 size={15} className="auth-spin" />
+                  ) : (
+                    <Play size={14} />
+                  )}
+                  {isDeploying ? "Queuing…" : "Deploy project"}
+                </button>
+              </div>
+              <div className="composer-options">
+                <div>
+                  <span>Try an example</span>
+                  <button
+                    type="button"
+                    onClick={() => setGitUrl("fixtures/demo-app")}
+                  >
+                    <Globe2 size={13} /> Static site
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setGitUrl("fixtures/demo-server")}
+                  >
+                    <Box size={13} /> Node.js server
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  className="env-toggle"
+                  aria-expanded={showEnv}
+                  aria-controls="environment-fields"
+                  onClick={() => setShowEnv(!showEnv)}
+                >
+                  Environment variables <ChevronDown size={14} />
+                </button>
+              </div>
               {showEnv && (
-                <div className="mt-3 space-y-2.5 pl-3 border-l border-zinc-800">
-                  <p className="text-[11px] text-zinc-500 font-mono">
-                    Injected into Docker build sandbox during compilation.
+                <div id="environment-fields" className="environment-fields">
+                  <p>
+                    Variables are passed to your build and application. Values
+                    stay hidden here.
                   </p>
                   {envVars.map((item, idx) => (
-                    <div key={idx} className="flex gap-2 items-center">
+                    <div className="environment-row" key={idx}>
                       <input
-                        type="text"
-                        placeholder="KEY (e.g. VITE_API_URL)"
+                        aria-label={"Variable name " + (idx + 1)}
+                        placeholder="VARIABLE_NAME"
                         value={item.key}
-                        onChange={(e) => handleUpdateEnv(idx, "key", e.target.value)}
-                        className="w-1/3 bg-black border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:outline-none focus:border-zinc-500 uppercase"
+                        onChange={(e) =>
+                          handleUpdateEnv(idx, "key", e.target.value)
+                        }
                       />
                       <input
-                        type="text"
-                        placeholder="VALUE"
+                        aria-label={"Variable value " + (idx + 1)}
+                        type="password"
+                        placeholder="Value"
                         value={item.value}
-                        onChange={(e) => handleUpdateEnv(idx, "value", e.target.value)}
-                        className="flex-1 bg-black border border-zinc-800 rounded px-3 py-1.5 text-xs text-zinc-100 placeholder-zinc-600 font-mono focus:outline-none focus:border-zinc-500"
+                        onChange={(e) =>
+                          handleUpdateEnv(idx, "value", e.target.value)
+                        }
+                        autoComplete="off"
                       />
                       <button
                         type="button"
+                        className="icon-button"
+                        aria-label={"Remove variable " + (idx + 1)}
                         onClick={() => handleRemoveEnv(idx)}
-                        disabled={envVars.length === 1 && !item.key && !item.value}
-                        className="text-zinc-500 hover:text-red-400 p-1.5 rounded transition-colors disabled:opacity-20 disabled:cursor-not-allowed cursor-pointer"
-                        title="Remove variable"
                       >
-                        <Trash2 className="w-3.5 h-3.5" />
+                        <Trash2 size={15} />
                       </button>
                     </div>
                   ))}
                   <button
+                    className="button subtle"
                     type="button"
                     onClick={handleAddEnv}
-                    className="inline-flex items-center gap-1.5 text-xs font-mono text-zinc-400 hover:text-white pt-1 cursor-pointer"
                   >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Add Variable</span>
+                    <Plus size={14} /> Add variable
                   </button>
                 </div>
               )}
-            </div>
-          </form>
-        </div>
-
-        {/* 2-Column Grid: Left is History, Right is Active Deployment & Terminal */}
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
-          {/* History Sidebar (4 Columns) */}
-          <div className="lg:col-span-4 border border-zinc-800 bg-zinc-900/40 rounded-xl p-5 shadow-lg">
-            <div className="flex items-center justify-between pb-3 border-b border-zinc-800 mb-3">
-              <div className="flex items-center gap-2 text-xs font-mono font-semibold uppercase tracking-wider text-zinc-300">
-                <History className="w-4 h-4 text-zinc-400" />
-                <span>Deployment History</span>
+            </form>
+          </section>
+          <section
+            id="deployments"
+            className="deployment-section"
+            aria-labelledby="deployment-heading"
+          >
+            <div className="section-title">
+              <div>
+                <h2 id="deployment-heading">Recent activity</h2>
+                <span>Every release, one clear view.</span>
               </div>
               <button
-                type="button"
-                onClick={fetchDeployments}
-                className="text-zinc-500 hover:text-zinc-300 p-1 rounded transition-colors cursor-pointer"
-                title="Refresh history"
+                className="button subtle"
+                onClick={() => void fetchDeployments()}
+                aria-label="Refresh deployments"
               >
-                <RotateCw className="w-3.5 h-3.5" />
+                <RotateCw size={14} /> Refresh
               </button>
             </div>
-
-            {isLoadingHistory ? (
-              <div className="py-8 text-center text-xs text-zinc-500 font-mono flex items-center justify-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Loading history...</span>
+            <div className="deployment-toolbar">
+              <div
+                className="filter-tabs"
+                role="group"
+                aria-label="Filter deployments"
+              >
+                {["All deployments", "Production", "Failed"].map((tab) => (
+                  <button
+                    key={tab}
+                    aria-pressed={filter === tab}
+                    onClick={() => setFilter(tab)}
+                  >
+                    {tab}
+                  </button>
+                ))}
               </div>
-            ) : deployments.length === 0 ? (
-              <div className="py-8 text-center text-xs text-zinc-500 font-mono">
-                No past deployments recorded.
+              <label className="search-field">
+                <Search size={15} />
+                <input
+                  aria-label="Search deployments"
+                  placeholder="Find a deployment…"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                />
+              </label>
+            </div>
+            {loadError && (
+              <div className="workspace-alert" role="alert">
+                <AlertCircle size={16} />
+                {loadError}
               </div>
-            ) : (
-              <div className="space-y-2 max-h-[500px] overflow-y-auto pr-1">
-                {deployments.map((dep) => {
-                  const isSelected = dep.id === activeDeploymentId;
-                  return (
+            )}
+            <div className="deployment-grid">
+              <div className="deployment-list" aria-label="Deployment history">
+                {isLoadingHistory ? (
+                  <div className="empty-state" role="status">
+                    <Loader2 className="auth-spin" size={24} />
+                    <p>Loading your deployments…</p>
+                  </div>
+                ) : visibleDeployments.length === 0 ? (
+                  <div className="empty-state">
+                    <Box size={28} />
+                    <h3>
+                      {deployments.length
+                        ? "No matching deployments"
+                        : "Your next release starts here"}
+                    </h3>
+                    <p>
+                      {deployments.length
+                        ? "Try another search or filter."
+                        : "Add a repository above to deploy your first project."}
+                    </p>
+                  </div>
+                ) : (
+                  visibleDeployments.map((dep) => (
                     <button
                       key={dep.id}
-                      type="button"
+                      aria-pressed={activeDeploymentId === dep.id}
+                      className={
+                        "deployment-row " +
+                        (activeDeploymentId === dep.id ? "selected" : "")
+                      }
                       onClick={() => setActiveDeploymentId(dep.id)}
-                      className={`w-full text-left p-3 rounded-lg border transition-all cursor-pointer font-mono ${
-                        isSelected 
-                          ? "border-zinc-600 bg-zinc-800/80 shadow-md" 
-                          : "border-zinc-800/60 bg-black/40 hover:bg-zinc-850 hover:border-zinc-700"
-                      }`}
                     >
-                      <div className="flex items-center justify-between gap-2 mb-1.5">
-                        <span className="text-xs font-semibold text-white truncate">
-                          {dep.id}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          {dep.is_production && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                              ★ PROD
-                            </span>
-                          )}
-                          {dep.runtime_type === "dynamic" && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                              ⚡ SERVER
-                            </span>
-                          )}
-                          {dep.status === "READY" && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                              READY
-                            </span>
-                          )}
-                          {dep.status === "BUILDING" && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
-                              BUILDING
-                            </span>
-                          )}
-                          {dep.status === "QUEUED" && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                              QUEUED
-                            </span>
-                          )}
-                          {dep.status === "FAILED" && (
-                            <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-500/10 text-red-400 border border-red-500/20">
-                              FAILED
-                            </span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="text-[11px] text-zinc-400 truncate mb-1">
-                        {dep.git_url}
-                      </div>
-
-                      <div className="flex items-center justify-between text-[10px] text-zinc-500 tabular-nums">
-                        <span className="flex items-center gap-1">
-                          <Clock className="w-3 h-3" />
-                          {formatTime(dep.created_at)}
-                        </span>
-                        {dep.duration_ms && (
-                          <span>{formatDuration(dep.duration_ms)}</span>
-                        )}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </div>
-
-          {/* Active Deployment Details & Terminal (8 Columns) */}
-          <div className="lg:col-span-8 space-y-6">
-            {activeDeployment ? (
-              <>
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 p-5 rounded-xl border border-zinc-800 bg-zinc-900/60">
-                  <div className="flex items-center gap-4">
-                    <div className="w-10 h-10 rounded-lg border border-zinc-700 bg-black flex items-center justify-center shrink-0">
-                      <Layers className="w-5 h-5 text-zinc-300" />
-                    </div>
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2.5">
-                        <h3 className="font-mono text-sm font-semibold text-white">
-                          {activeDeployment.id}
-                        </h3>
-                        {activeDeployment.is_production && (
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                            ★ PRODUCTION
-                          </span>
-                        )}
-                        {activeDeployment.runtime_type === "dynamic" && (
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-purple-500/10 text-purple-400 border border-purple-500/20">
-                            ⚡ DYNAMIC CONTAINER
-                          </span>
-                        )}
-                        {activeDeployment.status === "QUEUED" && (
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-yellow-500/10 text-yellow-400 border border-yellow-500/20">
-                            QUEUED
-                          </span>
-                        )}
-                        {activeDeployment.status === "BUILDING" && (
-                          <span className="px-2 py-0.5 rounded text-[11px] font-mono bg-blue-500/10 text-blue-400 border border-blue-500/20 animate-pulse">
-                            BUILDING
-                          </span>
-                        )}
-                        {activeDeployment.status === "READY" && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                            <CheckCircle2 className="w-3 h-3" /> READY
-                          </span>
-                        )}
-                        {activeDeployment.status === "FAILED" && (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-red-500/10 text-red-400 border border-red-500/20">
-                            <AlertCircle className="w-3 h-3" /> FAILED
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-400 mt-1 font-mono">
-                        <span>Preview: <code>{activeDeployment.id}.localhost:8000</code></span>
-                        {activeDeployment.production_url && (
-                          <span className="text-amber-300/90">
-                            • Production: <a href={activeDeployment.production_url} target="_blank" rel="noreferrer" className="underline hover:text-amber-200">{activeDeployment.project_slug}.localhost:8000</a>
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2.5">
-                    {activeDeployment.status === "READY" && !activeDeployment.is_production && (
-                      <button
-                        type="button"
-                        onClick={() => handlePromote(activeDeployment.id)}
-                        disabled={isPromoting}
-                        className="inline-flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-amber-300 border border-amber-500/30 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
-                        title="Promote this deployment to the project's production domain"
+                      <span
+                        className={
+                          "deployment-mark " + dep.status.toLowerCase()
+                        }
                       >
-                        {isPromoting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <span>★ PROMOTE TO PROD</span>}
-                      </button>
-                    )}
-                    {activeDeployment.is_production && activeDeployment.can_rollback && (
-                      <button
-                        type="button"
-                        onClick={() => handleRollback(activeDeployment.id)}
-                        disabled={isRollingBack}
-                        className="inline-flex items-center gap-1.5 bg-zinc-800 hover:bg-zinc-700 text-rose-300 border border-rose-500/30 px-3 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors disabled:opacity-50 cursor-pointer"
-                        title={`Rollback production domain to previous deployment (${activeDeployment.previous_production_deployment_id})`}
-                      >
-                        {isRollingBack ? (
-                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        {dep.runtime_type === "dynamic" ? (
+                          <Box size={18} />
                         ) : (
+                          <Globe2 size={18} />
+                        )}
+                      </span>
+                      <span className="deployment-row-content">
+                        <span className="deployment-row-title">
+                          <strong>{projectName(dep)}</strong>
+                          {badge(dep)}
+                        </span>
+                        <span className="deployment-id">{dep.id}</span>
+                        <span className="deployment-row-meta">
+                          <span>
+                            {dep.is_production ? "Production" : "Preview"}
+                          </span>
+                          <span>
+                            {formatTime(dep.created_at)}
+                            {dep.duration_ms
+                              ? " · " + formatDuration(dep.duration_ms)
+                              : ""}
+                          </span>
+                        </span>
+                      </span>
+                    </button>
+                  ))
+                )}
+              </div>
+              <div className="deployment-detail">
+                {activeDeployment ? (
+                  <>
+                    <div className="detail-header">
+                      <span className="detail-label">Deployment details</span>
+                      {badge(activeDeployment)}
+                    </div>
+                    <div className="detail-title">
+                      <h3>{projectName(activeDeployment)}</h3>
+                      <span>{activeDeployment.id}</span>
+                    </div>
+                    <dl className="detail-facts">
+                      <div>
+                        <dt>Environment</dt>
+                        <dd>
+                          <span className="environment-dot" />
+                          {activeDeployment.is_production
+                            ? "Production"
+                            : "Preview"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Source</dt>
+                        <dd title={activeDeployment.git_url}>
+                          <GitBranch size={13} />
+                          {activeDeployment.git_url}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Runtime</dt>
+                        <dd>
+                          {activeDeployment.runtime_type === "dynamic"
+                            ? "Node.js container"
+                            : "Static site"}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Created</dt>
+                        <dd>
+                          {new Date(activeDeployment.created_at).toLocaleString(
+                            [],
+                            {
+                              month: "short",
+                              day: "numeric",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            },
+                          )}
+                        </dd>
+                      </div>
+                      <div>
+                        <dt>Build duration</dt>
+                        <dd>
+                          {formatDuration(activeDeployment.duration_ms) || "—"}
+                        </dd>
+                      </div>
+                    </dl>
+                    {activeDeployment.status === "READY" && (
+                      <div className="deployment-domains">
+                        <span>Preview URL</span>
+                        <a
+                          href={activeDeployment.live_url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          {activeDeployment.live_url.replace(
+                            /^https?:\/\//,
+                            "",
+                          )}
+                          <ArrowUpRight size={14} />
+                        </a>
+                        {activeDeployment.production_url && (
                           <>
-                            <RotateCcw className="w-3.5 h-3.5" />
-                            <span>ROLLBACK PROD</span>
+                            <span>Production URL</span>
+                            <a
+                              href={activeDeployment.production_url}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {activeDeployment.production_url.replace(
+                                /^https?:\/\//,
+                                "",
+                              )}
+                              <ArrowUpRight size={14} />
+                            </a>
                           </>
                         )}
-                      </button>
+                      </div>
                     )}
-                    {activeDeployment.status === "READY" ? (
-                      <a
-                        href={activeDeployment.live_url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="inline-flex items-center gap-2 bg-emerald-500 hover:bg-emerald-400 text-black px-4 py-2 rounded-lg text-xs font-semibold tracking-wide transition-colors"
-                      >
-                        <span>VISIT PREVIEW</span>
-                        <ExternalLink className="w-3.5 h-3.5" />
-                      </a>
-                    ) : (
-                      <span className="text-xs text-zinc-500 font-mono">
-                        Compiling in Docker Sandbox...
-                      </span>
+                    <div className="detail-actions">
+                      {activeDeployment.status === "READY" && (
+                        <>
+                          <a
+                            className="button primary"
+                            href={activeDeployment.live_url}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Visit preview <ExternalLink size={14} />
+                          </a>
+                          {!activeDeployment.is_production && (
+                            <button
+                              className="button"
+                              disabled={isPromoting}
+                              onClick={() => handlePromote(activeDeployment.id)}
+                            >
+                              {isPromoting ? (
+                                <Loader2 size={14} className="auth-spin" />
+                              ) : (
+                                <ArrowUpRight size={14} />
+                              )}{" "}
+                              Promote
+                            </button>
+                          )}
+                        </>
+                      )}
+                      {activeDeployment.is_production &&
+                        activeDeployment.can_rollback && (
+                          <button
+                            className="button"
+                            disabled={isRollingBack}
+                            onClick={() =>
+                              setConfirmation({
+                                action: "rollback",
+                                deploymentId: activeDeployment.id,
+                              })
+                            }
+                          >
+                            <RotateCcw size={14} /> Rollback
+                          </button>
+                        )}
+                      {!activeDeployment.is_production && (
+                        <button
+                          className="icon-button delete-button"
+                          aria-label="Delete deployment"
+                          disabled={isDeleting}
+                          onClick={() =>
+                            setConfirmation({
+                              action: "delete",
+                              deploymentId: activeDeployment.id,
+                            })
+                          }
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      )}
+                    </div>
+                    {metrics?.status === "running" && (
+                      <div className="runtime-metrics">
+                        <div>
+                          <Cpu size={14} />
+                          <span>
+                            CPU<strong>{metrics.cpuPercent}%</strong>
+                          </span>
+                        </div>
+                        <div>
+                          <HardDrive size={14} />
+                          <span>
+                            Memory
+                            <strong>
+                              {formatBytes(metrics.memoryUsageBytes)}
+                            </strong>
+                          </span>
+                        </div>
+                        <div>
+                          <Activity size={14} />
+                          <span>
+                            Processes
+                            <strong>
+                              {metrics.pidsCurrent} / {metrics.pidsLimit}
+                            </strong>
+                          </span>
+                        </div>
+                        <div>
+                          <Wifi size={14} />
+                          <span>
+                            Uptime
+                            <strong>
+                              {formatUptime(metrics.uptimeSeconds)}
+                            </strong>
+                          </span>
+                        </div>
+                      </div>
                     )}
-
-                    {!activeDeployment.is_production && (
-                      <button
-                        type="button"
-                        onClick={() => handleDelete(activeDeployment.id)}
-                        disabled={isDeleting}
-                        className="inline-flex items-center justify-center p-2 rounded-lg bg-zinc-900 hover:bg-rose-950/40 text-zinc-400 hover:text-rose-400 border border-zinc-800 hover:border-rose-500/30 transition-colors disabled:opacity-50 cursor-pointer"
-                        title="Teardown container, remove disk artifacts, and purge deployment"
-                      >
-                        {isDeleting ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                      </button>
+                    {metrics?.status === "static" && activeDeployment.runtime_type !== "dynamic" && activeDeployment.status === "READY" && (
+                      <p className="runtime-note">
+                        <Globe2 size={14} /> Static assets served through the
+                        edge proxy.
+                      </p>
                     )}
-                  </div>
-                </div>
-
-                {/* Real-time Container Telemetry Card */}
-                {metrics && metrics.status === "running" && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4 rounded-xl border border-zinc-800 bg-zinc-950/80 font-mono text-xs">
-                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
-                      <Cpu className="w-4 h-4 text-emerald-400 shrink-0" />
-                      <div>
-                        <div className="text-[10px] uppercase text-zinc-500">CPU Load</div>
-                        <div className="font-semibold text-zinc-200 tabular-nums">{metrics.cpuPercent}%</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
-                      <HardDrive className="w-4 h-4 text-purple-400 shrink-0" />
-                      <div>
-                        <div className="text-[10px] uppercase text-zinc-500">Memory ({metrics.memoryPercent}%)</div>
-                        <div className="font-semibold text-zinc-200 tabular-nums">{formatBytes(metrics.memoryUsageBytes)}</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
-                      <Activity className="w-4 h-4 text-blue-400 shrink-0" />
-                      <div>
-                        <div className="text-[10px] uppercase text-zinc-500">Processes</div>
-                        <div className="font-semibold text-zinc-200 tabular-nums">{metrics.pidsCurrent} / {metrics.pidsLimit} PIDs</div>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-3 p-2.5 rounded-lg bg-zinc-900/60 border border-zinc-800/80">
-                      <Wifi className="w-4 h-4 text-amber-400 shrink-0" />
-                      <div>
-                        <div className="text-[10px] uppercase text-zinc-500">Uptime / Net I/O</div>
-                        <div className="font-semibold text-zinc-200 tabular-nums">{formatUptime(metrics.uptimeSeconds)} • ↓{formatBytes(metrics.networkRxBytes)}</div>
-                      </div>
-                    </div>
+                    <Terminal
+                      deploymentId={activeDeployment.id}
+                      onStatusChange={() => void fetchDeployments()}
+                    />
+                  </>
+                ) : (
+                  <div className="empty-state detail-empty">
+                    <Command size={32} />
+                    <h3>A closer look at your release.</h3>
+                    <p>
+                      Select a deployment to inspect its details, view build
+                      logs and manage production.
+                    </p>
                   </div>
                 )}
-                {metrics && metrics.status === "static" && (
-                  <div className="flex items-center justify-between px-4 py-2.5 rounded-xl border border-zinc-800/80 bg-zinc-950/40 text-xs font-mono text-zinc-400">
-                    <span className="flex items-center gap-2">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400"></span>
-                      Static Asset Edge Host
-                    </span>
-                    <span className="text-zinc-500">Zero Idle Memory & CPU Footprint</span>
-                  </div>
-                )}
-
-                {/* xterm.js Terminal with Persisted History Replay */}
-                <Terminal
-                  deploymentId={activeDeployment.id}
-                  onStatusChange={(status) => {
-                    setDeployments((prev) =>
-                      prev.map((d) => (d.id === activeDeployment.id ? { ...d, status } : d))
-                    );
-                  }}
-                />
-              </>
-            ) : (
-              <div className="border border-zinc-800/80 rounded-xl p-12 text-center text-zinc-500 font-mono text-sm bg-zinc-900/20">
-                Select a deployment from the history or trigger a new build above.
               </div>
-            )}
-          </div>
-        </div>
-      </main>
+            </div>
+          </section>
+          <footer className="workspace-footer">
+            <span>
+              <Brand symbolOnly /> Stratus Cloud
+            </span>
+            <span>Built to ship. Designed to stay yours.</span>
+          </footer>
+        </main>
+      </div>
+      <ConfirmDialog
+        open={confirmation !== null}
+        title={
+          confirmation?.action === "delete"
+            ? "Delete this deployment?"
+            : "Roll back production?"
+        }
+        description={
+          confirmation?.action === "delete"
+            ? "This stops the application and removes its files and logs. This action cannot be undone."
+            : "Production traffic will switch to the previous deployment. Your current deployment will remain available."
+        }
+        confirmLabel={
+          confirmation?.action === "delete"
+            ? "Delete deployment"
+            : "Roll back production"
+        }
+        destructive={confirmation?.action === "delete"}
+        onCancel={() => setConfirmation(null)}
+        onConfirm={() => {
+          if (!confirmation) return;
+          setConfirmation(null);
+          if (confirmation.action === "delete")
+            void handleDelete(confirmation.deploymentId);
+          else void handleRollback(confirmation.deploymentId);
+        }}
+      />
     </div>
   );
 }

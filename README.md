@@ -1,7 +1,7 @@
 # Stratus Cloud
 
 <p align="left">
-  <img src="https://img.shields.io/badge/Next.js-15-black?style=flat-square&logo=next.js" alt="Next.js 15" />
+  <img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js" alt="Next.js 16" />
   <a href="https://github.com/gxmngi/stratus-cloud/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gxmngi/stratus-cloud/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white" alt="CI" /></a>
   <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go" />
   <img src="https://img.shields.io/badge/Docker-Sandbox-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
@@ -10,7 +10,7 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-gray?style=flat-square" alt="License" /></a>
 </p>
 
-> A lightweight, self-hosted Cloud Deployment Platform (Mini-Vercel / PaaS) built from scratch with Next.js 15, Go, Docker, and Redis.
+> A lightweight, self-hosted Cloud Deployment Platform (Mini-Vercel / PaaS) built from scratch with Next.js 16, Go, Docker, and Redis.
 
 ![Stratus Cloud Dashboard](assets/dashboard-preview.png)
 
@@ -20,7 +20,7 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 
 ## Key Architectural Highlights
 
-* **Polyglot Monorepo Design:** Clean separation of concerns featuring a Next.js 15 UI, a TypeScript Builder & Orchestrator, and a high-performance edge proxy written in Go.
+* **Polyglot Monorepo Design:** Clean separation of concerns featuring a Next.js 16 UI, a TypeScript Builder & Orchestrator, and a high-performance edge proxy written in Go.
 * **Isolated Ephemeral Sandboxes & Linux Security Hardening:** Every build executes inside a throwaway Docker container (`node:20-alpine`) with strict resource constraints (1GB RAM, 1GB Swap, 1.0 CPU quota, `PidsLimit: 256` fork-bomb defense), root capability dropping (`CapDrop: ['ALL']`), and `no-new-privileges:true` kernel execution fences.
 * **Intelligent Package Manager Auto-Detection:** Inspects project root files on the fly and dynamically switches between `pnpm`, `yarn`, `bun`, and `npm` without requiring manual configuration.
 * **In-Memory Go Edge Proxy & Dynamic Cache Invalidation:** Sub-millisecond $O(1)$ in-memory routing table with pre-warmed connection pools and zero-disk per-request I/O. Supports instant hot-reloading via Redis Pub/Sub (`proxy:routes`) and internal REST control planes.
@@ -61,7 +61,7 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 flowchart LR
     subgraph UI ["01. Control Plane & UI"]
         Dev["User Browser<br/>(localhost:3000)"]
-        Dash["Next.js 15 Dashboard<br/>(xterm.js Terminal)"]
+        Dash["Next.js 16 Dashboard<br/>(xterm.js Terminal)"]
         API["API Gateway<br/>(Port 4000)"]
         Dev --> Dash
         Dash -->|"1. POST /deploy"| API
@@ -98,7 +98,7 @@ flowchart LR
 ```text
 stratus-cloud/
 ├── apps/
-│   └── web/              # Next.js 15 Developer Dashboard with xterm.js
+│   └── web/              # Next.js 16 Developer Dashboard with xterm.js
 ├── services/
 │   ├── api/              # REST Orchestrator API & WebSocket Gateway (Node/TS)
 │   ├── builder/          # Hardened Docker Sandbox Build Engine (Dockerode + Redis Streams)
@@ -113,44 +113,66 @@ stratus-cloud/
 ## Getting Started
 
 ### Prerequisites
-* [Node.js](https://nodejs.org/) v20+
-* [Go](https://go.dev/) v1.22+
+* [Node.js](https://nodejs.org/) v22+
+* [Go](https://go.dev/) v1.26+
 * [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Engine running)
 * [Git](https://git-scm.com/)
 
-### 1. Start Redis Message Broker
-```bash
-docker run -d --name stratus-redis -p 6379:6379 redis:alpine
+### Install service dependencies (first run)
+
+```powershell
+npm --prefix services/api ci
+npm --prefix services/builder ci
+npm --prefix apps/web ci
 ```
 
-### 2. Start the Go Edge Proxy (Port 8000)
-```bash
-cd services/proxy
-go run main.go
-```
+### Start the complete local stack
 
-### 3. Start the Builder Worker Daemon
-```bash
-cd services/builder
-npm install
-npx tsx src/index.ts
-```
+From the repository root:
 
-### 4. Start the API & WebSocket Gateway (Port 4000)
-```bash
-cd services/api
-npm install
-npx tsx src/index.ts
-```
-
-### 5. Start the Developer Dashboard (Port 3000)
-```bash
-cd apps/web
-npm install
+```powershell
 npm run dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) in your browser, enter any Git repository or local fixture path (`fixtures/demo-app`), click **Deploy**, and watch your application build and deploy with live streaming logs.
+The launcher checks Docker's Linux engine, prepares an isolated Redis container,
+starts builder, proxy, API and web, and uses the separate development database.
+It binds the local services to loopback and does not delete existing Docker data.
+If an older Stratus stack owns ports 3000, 4000 or 8000, stop it before launching.
+Press Ctrl+C to stop the local processes; the managed Redis container remains
+available and restarts with Docker Desktop.
+
+Open [http://localhost:3000/login](http://localhost:3000/login) and sign in with
+`alice@example.test` / `Stratus local Alice demo 2026`. Enter `fixtures/demo-app`,
+click **Deploy**, then open its preview after the build becomes READY.
+These are local development credentials; keep this mode on your own machine.
+
+For login UI work without Docker, use `npm run dev:auth` from the root instead.
+That mode disables deployment actions. See [Local deployment](docs/local-deployment.md)
+for lifecycle verification and troubleshooting.
+
+### Verify real deployment, promotion and rollback
+
+With the complete stack running, open another terminal at the root:
+
+```powershell
+npm run test:deploy
+```
+
+The check builds two distinct static releases, checks their served content,
+verifies owner isolation, promotes and rolls back the project alias, then removes
+the superseded preview while preserving the active deployment.
+
+### Verify worker and API crash recovery
+
+```powershell
+npm run test:recovery
+```
+
+This isolated Docker check kills a worker mid-build and redelivers its finished
+job to confirm the runtime is preserved. It also stops the API during a separate
+build, then checks that the restarted API reports READY and the preview serves
+the expected content. See [Build recovery](docs/build-recovery.md) for prerequisites,
+retry policy and recovery limits.
 
 ---
 
@@ -166,7 +188,7 @@ Open [http://localhost:3000](http://localhost:3000) in your browser, enter any G
 | **Resilient Task Pipeline** | **Redis Streams (`stream:build`)** | Replaced fragile `BLPOP` queues with persistent consumer groups. Guarantees at-least-once execution with `XACK`, automatic orphaned job recovery (`XAUTOCLAIM`), and 15m container execution fencing. |
 | **Sandbox Execution** | **Hardened Docker Engine API** | Complete container isolation for untrusted user code. Enforces 1GB RAM limits, `PidsLimit: 256`, `CapDrop: ['ALL']`, `no-new-privileges: true`, bounded swap, and host credential environment blocklist. |
 | **Message Broker & Logs** | **Redis (Streams + Pub/Sub)** | Decouples the build worker fleet from the WebSocket gateway. Allows independent horizontal scaling of workers across multiple machines. |
-| **Developer Dashboard** | **Next.js 15 + xterm.js** | Server-side rendering paired with client-side interactive terminal emulator via WebSockets for raw container `stdout`/`stderr` streaming and 1-click blue-green promotion. |
+| **Developer Dashboard** | **Next.js 16 + xterm.js** | Server-side rendering paired with client-side interactive terminal emulator via WebSockets for raw container `stdout`/`stderr` streaming and 1-click blue-green promotion. |
 
 ---
 
@@ -181,6 +203,34 @@ Open [http://localhost:3000](http://localhost:3000) in your browser, enter any G
 7. **Slowloris & Timeout Protection:** The HTTP server configures strict `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` bounds to mitigate socket exhaustion attacks.
 
 ---
+
+## Running Tests
+
+For authentication setup, development accounts, existing-data migration and the
+login UI contract, see [Authentication readiness](docs/auth-readiness.md).
+
+Use Node.js 22 for the API and builder test suites, matching their CI jobs.
+Install dependencies with `npm ci` inside each service before the first run.
+
+```powershell
+cd services/api
+npm test
+
+cd ../builder
+npm test
+
+cd ../proxy
+go test ./...
+```
+
+The API test command configures a separate temporary SQLite database and workspace
+for each test process before loading application modules. These temporary files
+are removed after the tests. Use `npm test` so database tests do not use the
+application's normal data directory.
+
+GitHub Actions runs the API and builder suites alongside the dashboard build and
+Go proxy tests. These service tests do not cover the complete deployment flow;
+end-to-end deployment tests are a separate next step.
 
 ## License
 

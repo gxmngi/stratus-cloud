@@ -4,7 +4,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:backup": "tsx scripts/backup-db.ts",
+    "db:migrate": "tsx scripts/migrate-db.ts",
+    "seed:dev": "tsx scripts/seed-dev.ts",
+    "dev:auth": "tsx scripts/dev-auth.ts",
+    "test": "tsx --import ./test/setup.mjs --test src/*.test.ts",
+    "projects:claim": "tsx scripts/claim-projects.ts"
   },
   "keywords": [],
   "author": "",
@@ -15,6 +22,7 @@
     "cors": "^2.8.6",
     "dockerode": "^5.0.1",
     "express": "^5.2.1",
+    "express-rate-limit": "^8.7.3",
     "ioredis": "^6.0.0",
     "ws": "^8.21.3"
   },

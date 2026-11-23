@@ -7,6 +7,72 @@ on:
     branches: [ main ]
 
 jobs:
+  services:
+    name: Test ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    strategy:
+      matrix:
+        service: [api, builder]
+    defaults:
+      run:
+        working-directory: services/${{ matrix.service }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+          cache-dependency-path: services/${{ matrix.service }}/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run test suite
+        run: npm test
+        env:
+          REDIS_TEST_URL: redis://127.0.0.1:6379
+
+      - name: Check builder types
+        if: matrix.service == 'builder'
+        run: npx tsc --noEmit
+
+      - name: Install API dependencies for recovery check
+        if: matrix.service == 'builder'
+        working-directory: services/api
+        run: npm ci
+
+      - name: Set up Go for recovery preview check
+        if: matrix.service == 'builder'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/proxy/go.mod
+          cache-dependency-path: services/proxy/go.sum
+
+      - name: Pull recovery check images
+        if: matrix.service == 'builder'
+        run: docker pull node:20-alpine
+
+      - name: Verify worker and API crash recovery with Docker
+        if: matrix.service == 'builder'
+        working-directory: .
+        run: npm run test:recovery
+
+      - name: Check API types
+        if: matrix.service == 'api'
+        run: npm run typecheck
+
   web:
     name: Build Next.js Dashboard
     runs-on: ubuntu-latest
@@ -16,7 +82,7 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'npm'
           cache-dependency-path: apps/web/package-lock.json
 
@@ -24,9 +90,25 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Lint web
+        working-directory: apps/web
+        run: npm run lint
+
       - name: Build Next.js
         working-directory: apps/web
         run: npm run build
+
+      - name: Install API dependencies for browser tests
+        working-directory: services/api
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Test authentication in the browser
+        working-directory: apps/web
+        run: npm run test:e2e
 
   proxy:
     name: Test Go Reverse Proxy
@@ -37,7 +119,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.24'
+          go-version: '1.26'
 
       - name: Run test suite
         working-directory: services/proxy

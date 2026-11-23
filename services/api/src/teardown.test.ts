@@ -6,7 +6,10 @@ import { teardownDeployment } from './teardown';
 import { initDatabase, dbService, db } from './db';
 
 test.describe('Deployment Teardown & Lifecycle GC', () => {
-    const testWorkspace = path.resolve(__dirname, '../../test-workspace');
+    const testWorkspace = process.env.TEST_WORKSPACE_DIR;
+    if (!testWorkspace) {
+        throw new Error('Run with npm test to configure an isolated test workspace');
+    }
 
     test.before(() => {
         initDatabase();
@@ -25,6 +28,15 @@ test.describe('Deployment Teardown & Lifecycle GC', () => {
         if (fs.existsSync(testWorkspace)) {
             fs.rmSync(testWorkspace, { recursive: true, force: true });
         }
+    });
+
+    test('rejects a workspace traversal before changing deployment records', async () => {
+        dbService.createDeployment({ id: '../outside', project_id: null, git_url: 'fixtures/demo-app',
+            status: 'READY', live_url: 'about:blank', created_at: 1 });
+        const result = await teardownDeployment('../outside', testWorkspace);
+        assert.equal(result.success, false);
+        assert.match(result.error || '', /Invalid deployment workspace/);
+        assert.ok(dbService.getDeployment('../outside'));
     });
 
     test('refuses to teardown active production deployment', async () => {

@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import { Request, Response } from 'express';
 import Redis from 'ioredis';
-import { dbService } from './db';
+import { dbService, db, type ProjectRecord } from './db';
 
 // Branch ที่จะ Deploy อัตโนมัติเมื่อมีการ push
 const DEPLOY_REFS = ['refs/heads/main', 'refs/heads/master'];
@@ -87,7 +87,17 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
         const commitMessage = (payload.head_commit?.message ?? '').split('\n')[0];
         const pusher = payload.pusher?.name ?? 'unknown';
 
-        const project = dbService.getOrCreateProject(cloneUrl);
+        // The server-wide webhook secret is operator-controlled. It can deploy
+        // existing owned projects, but cannot create or claim projects.
+        const projectId = req.params.projectId;
+        const candidates = (projectId
+            ? db.prepare('SELECT * FROM projects WHERE id = ? AND git_url = ? AND owner_id IS NOT NULL').all(projectId, cloneUrl)
+            : db.prepare('SELECT * FROM projects WHERE git_url = ? AND owner_id IS NOT NULL').all(cloneUrl)) as ProjectRecord[];
+        const project = candidates.length === 1 ? candidates[0] : undefined;
+        if (!project) {
+            res.status(202).json({ status: 'ignored', reason: 'No unique configured project; use the project-specific webhook URL' });
+            return;
+        }
         dbService.createDeployment({
             id: deploymentId,
             project_id: project.id,
@@ -114,7 +124,6 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
 
         const jobJson = JSON.stringify(job);
         await publisher.xadd('stream:build', '*', 'job', jobJson);
-        await publisher.rpush('queue:build', jobJson);
         console.log(`[GITHUB] Queued ${deploymentId} from ${repoFullName}@${sha.slice(0, 7)} by ${pusher}`);
 
         res.status(202).json({ deploymentId, status: 'QUEUED' });

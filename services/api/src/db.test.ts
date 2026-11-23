@@ -21,6 +21,28 @@ test.describe('SQLite Database & Rollback Service', () => {
         assert.equal(project.previous_production_deployment_id, undefined);
     });
 
+    test('uses the final directory name for Windows local projects', () => {
+        const project = dbService.getOrCreateProject('C:\\Users\\Developer\\projects\\demo-server');
+        assert.equal(project.name, 'demo-server');
+        assert.equal(project.slug, 'demo-server');
+    });
+
+    test('duplicate terminal notifications preserve completion and ignore late build events', () => {
+        const project = dbService.getOrCreateProject('https://github.com/stratus/recovery.git');
+        for (const status of ['READY', 'FAILED'] as const) {
+            const id = `dep-terminal-${status}`;
+            dbService.createDeployment({ id, project_id: project.id, git_url: project.git_url,
+                status: 'QUEUED', live_url: '', created_at: Date.now() - 1000 });
+            dbService.updateDeploymentStatus(id, 'BUILDING');
+            dbService.updateDeploymentStatus(id, status, status === 'FAILED' ? 'Original failure' : undefined);
+            const completed = dbService.getDeployment(id);
+            dbService.updateDeploymentStatus(id, 'BUILDING');
+            dbService.updateDeploymentStatus(id, status, 'Replayed notification');
+            dbService.updateDeploymentStatus(id, status === 'READY' ? 'FAILED' : 'READY');
+            assert.deepEqual(dbService.getDeployment(id), completed);
+        }
+    });
+
     test('promotes deployment and tracks previous_production_deployment_id', () => {
         const project = dbService.getOrCreateProject('https://github.com/stratus/test-app.git');
 

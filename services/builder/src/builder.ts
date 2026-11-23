@@ -6,6 +6,8 @@ import Redis from 'ioredis';
 import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 import { findAvailablePort } from './port-allocator';
 import { waitForContainerReadiness } from './health';
+import { resolveDeploymentWorkspace } from './workspace';
+import { reservedRuntimePorts } from './runtime-ports';
 
 const docker = new Docker();
 
@@ -41,6 +43,8 @@ export interface BuildResult {
     runtimeType?: 'static' | 'dynamic';
     containerPort?: number | null;
     error?: string;
+    publicError?: string;
+    completedAt?: number;
 }
 
 /**
@@ -118,15 +122,16 @@ async function emitLog(deploymentId: string, rawMessage: string) {
     await redisPublisher.publish(channel, message);
 }
 
-export async function runBuild(options: BuildOptions): Promise<BuildResult> {
+export async function runBuild(options: BuildOptions, assertLease: () => Promise<void> = async () => {}): Promise<BuildResult> {
     try {
-        return await runBuildInner(options);
+        return await runBuildInner(options, assertLease);
     } finally {
         clearSecretMasker(options.deploymentId);
     }
 }
 
-async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
+async function runBuildInner(options: BuildOptions, assertLease: () => Promise<void>): Promise<BuildResult> {
+    await assertLease();
     const { 
         gitUrl, 
         deploymentId, 
@@ -134,13 +139,14 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         outputDir: customOutputDir,
     } = options;
 
-    const workspaceDir = path.join(WORKSPACE_ROOT, deploymentId);
+    const workspaceDir = resolveDeploymentWorkspace(WORKSPACE_ROOT, deploymentId);
     const codeDir = path.join(workspaceDir, 'code');
-    const hostCodeDir = path.join(HOST_WORKSPACE_ROOT, deploymentId, 'code');
+    const hostCodeDir = path.join(resolveDeploymentWorkspace(HOST_WORKSPACE_ROOT, deploymentId), 'code');
 
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Initializing build environment`);
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Workspace directory: ${workspaceDir}`);
 
+    await assertLease();
     if (fs.existsSync(workspaceDir)) {
         fs.rmSync(workspaceDir, { recursive: true, force: true });
     }
@@ -171,7 +177,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             } catch (err: unknown) {
                 const errorMessage = err instanceof Error ? err.message : String(err);
                 await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
-                await emitLog(deploymentId, `[STATUS] FAILED`);
                 return {
                     success: false,
                     exitCode: 1,
@@ -187,7 +192,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             } catch (err: unknown) {
                 const errorMessage = err instanceof Error ? err.message : String(err);
                 await emitLog(deploymentId, `[ERROR] [${deploymentId}] Failed to load local fixture: ${errorMessage}`);
-                await emitLog(deploymentId, `[STATUS] FAILED`);
                 return {
                     success: false,
                     exitCode: 1,
@@ -205,7 +209,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         } catch (err: unknown) {
             const errorMessage = err instanceof Error ? err.message : String(err);
             await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git clone failed: ${errorMessage}`);
-            await emitLog(deploymentId, `[STATUS] FAILED`);
             return {
                 success: false,
                 exitCode: 1,
@@ -254,7 +257,10 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     }
     let container: Docker.Container;
     try {
+        await assertLease();
         container = await docker.createContainer({
+            name: `stratus-build-${deploymentId}`,
+            Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'build' },
             Image: 'node:20-alpine',
             Cmd: ['sh', '-c', effectiveBuildCommand],
             WorkingDir: '/app',
@@ -274,7 +280,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     } catch (err: unknown) {
         const errorMessage = err instanceof Error ? err.message : String(err);
         await emitLog(deploymentId, `[ERROR] [${deploymentId}] Container creation failed: ${errorMessage}`);
-        await emitLog(deploymentId, `[STATUS] FAILED`);
         return {
             success: false,
             exitCode: 1,
@@ -298,6 +303,7 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     });
 
     // Step 5: Execute & Await Completion with Timeout Guard
+    await assertLease();
     await container.start();
 
     const timeoutMs = Number(process.env.BUILD_TIMEOUT_MS) || 15 * 60 * 1000;
@@ -324,7 +330,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     await container.remove().catch(() => {});
 
     if (timedOut) {
-        await emitLog(deploymentId, `[STATUS] FAILED`);
         return {
             success: false,
             exitCode: 124,
@@ -343,6 +348,7 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             path.join(codeDir, '.next'),
         ];
 
+    await assertLease();
     const detectedDir = possibleDirs.find((dir) => fs.existsSync(dir));
     const isStaticApp = detectedDir && (
         fs.existsSync(path.join(detectedDir, 'index.html')) || 
@@ -357,21 +363,9 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             JSON.stringify({ type: 'static', updatedAt: Date.now() }, null, 2)
         );
 
-        // Notify Go reverse proxy via Redis Pub/Sub for immediate in-memory route registration
-        try {
-            await redisPublisher.publish('proxy:routes', JSON.stringify({
-                action: 'set',
-                subdomain: deploymentId,
-                type: 'static',
-            }));
-        } catch (pubErr) {
-            console.error('[REDIS] Failed to publish static route to proxy:routes:', pubErr);
-        }
-
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Static build succeeded`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact location: ${detectedDir}`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Artifact contents: [${generatedFiles.slice(0, 8).join(', ')}]`);
-        await emitLog(deploymentId, `[STATUS] READY`);
 
         return {
             success: true,
@@ -387,19 +381,16 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Detected dynamic server application`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Launching application container: "${startCmd}"`);
 
-        const allocatedPort = await findAvailablePort();
+        const allocatedPort = await findAvailablePort(4100, 4999, await reservedRuntimePorts(docker));
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Allocated dynamic host port: ${allocatedPort}`);
 
         let runContainer: Docker.Container;
         try {
-            // Remove previous container if already exists with same name
-            try {
-                const oldContainer = docker.getContainer(`stratus-${deploymentId}`);
-                await oldContainer.remove({ force: true });
-            } catch {}
-
+            await assertLease();
+            // Recovery has already removed only labelled containers owned by this deployment.
             runContainer = await docker.createContainer({
                 name: `stratus-${deploymentId}`,
+                Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'runtime' },
                 Image: 'node:20-alpine',
                 Cmd: ['sh', '-c', startCmd],
                 WorkingDir: '/app',
@@ -436,11 +427,11 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
                 emitLog(deploymentId, `[APP] ${chunk.toString()}`).catch(() => {});
             });
 
+            await assertLease();
             await runContainer.start();
         } catch (err: unknown) {
             const errorMsg = err instanceof Error ? err.message : String(err);
             await emitLog(deploymentId, `[ERROR] [${deploymentId}] Failed to launch container: ${errorMsg}`);
-            await emitLog(deploymentId, `[STATUS] FAILED`);
             return {
                 success: false,
                 exitCode: 1,
@@ -449,18 +440,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
                 error: errorMsg,
             };
         }
-
-        // Write runtime.json for Go Reverse Proxy routing
-        fs.writeFileSync(
-            path.join(workspaceDir, 'runtime.json'),
-            JSON.stringify({
-                type: 'dynamic',
-                port: allocatedPort,
-                containerId: runContainer.id,
-                targetPort: 3000,
-                updatedAt: Date.now(),
-            }, null, 2)
-        );
 
         // Active readiness health probe
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Initiating active readiness health probe on port ${allocatedPort}...`);
@@ -476,7 +455,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
                 await runContainer.stop({ t: 2 });
                 await runContainer.remove({ force: true });
             } catch {}
-            await emitLog(deploymentId, `[STATUS] FAILED`);
             return {
                 success: false,
                 exitCode: 1,
@@ -486,22 +464,22 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
             };
         }
 
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Readiness health check passed in ${probeResult.latencyMs}ms (HTTP ${probeResult.statusCode ?? 200})`);
-
-        // Notify Go reverse proxy via Redis Pub/Sub for immediate in-memory route registration
-        try {
-            await redisPublisher.publish('proxy:routes', JSON.stringify({
-                action: 'set',
-                subdomain: deploymentId,
+        await assertLease();
+        // Write runtime.json for Go Reverse Proxy routing
+        fs.writeFileSync(
+            path.join(workspaceDir, 'runtime.json'),
+            JSON.stringify({
                 type: 'dynamic',
                 port: allocatedPort,
-            }));
-        } catch (pubErr) {
-            console.error('[REDIS] Failed to publish dynamic route to proxy:routes:', pubErr);
-        }
+                containerId: runContainer.id,
+                targetPort: 3000,
+                updatedAt: Date.now(),
+            }, null, 2)
+        );
+
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Readiness health check passed in ${probeResult.latencyMs}ms (HTTP ${probeResult.statusCode ?? 200})`);
 
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Dynamic container running at http://${deploymentId}.localhost:8000`);
-        await emitLog(deploymentId, `[STATUS] READY`);
 
         return {
             success: true,
@@ -513,7 +491,6 @@ async function runBuildInner(options: BuildOptions): Promise<BuildResult> {
     }
 
     await emitLog(deploymentId, `[ERROR] [${deploymentId}] Build completed but neither static artifacts (dist/index.html) nor dynamic server entrypoint was found`);
-    await emitLog(deploymentId, `[STATUS] FAILED`);
     return {
         success: false,
         exitCode: result.StatusCode,
