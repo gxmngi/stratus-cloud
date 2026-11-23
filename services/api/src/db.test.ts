@@ -21,6 +21,12 @@ test.describe('SQLite Database & Rollback Service', () => {
         assert.equal(project.previous_production_deployment_id, undefined);
     });
 
+    test('uses the final directory name for Windows local projects', () => {
+        const project = dbService.getOrCreateProject('C:\\Users\\Developer\\projects\\demo-server');
+        assert.equal(project.name, 'demo-server');
+        assert.equal(project.slug, 'demo-server');
+    });
+
     test('duplicate terminal notifications preserve completion and ignore late build events', () => {
         const project = dbService.getOrCreateProject('https://github.com/stratus/recovery.git');
         for (const status of ['READY', 'FAILED'] as const) {

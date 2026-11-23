@@ -8,7 +8,7 @@ export function getOrCreateOwnedProject(userId: string, gitUrl: string): Project
         if (existing) return existing;
         // Legacy unowned projects require the explicit operator migration.
         if (db.prepare('SELECT id FROM projects WHERE git_url = ? AND owner_id IS NULL').get(gitUrl)) return undefined;
-        const name = gitUrl.replace(/\.git$/, '').split('/').pop() || 'app';
+        const name = gitUrl.replace(/\.git$/, '').split(/[\\/]/).pop() || 'app';
         const base = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
         const slug = db.prepare('SELECT id FROM projects WHERE slug = ?').get(base) ? `${base}-${randomUUID()}` : base;
         const now = Date.now();

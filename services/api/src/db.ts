@@ -146,7 +146,7 @@ export const dbService = {
         const existing = db.prepare('SELECT * FROM projects WHERE git_url = ? AND owner_id IS NULL').get(gitUrl) as ProjectRecord | undefined;
         if (existing) {
             if (!existing.slug) {
-                const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
+                const parts = gitUrl.replace(/\.git$/, '').split(/[\\/]/);
                 const name = parts[parts.length - 1] || 'unnamed-project';
                 const slug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
                 db.prepare('UPDATE projects SET slug = ? WHERE id = ?').run(slug, existing.id);
@@ -156,7 +156,7 @@ export const dbService = {
         }
 
         // Derive name and clean slug from git URL
-        const parts = gitUrl.replace(/\.git$/, '').split(/[/]/);
+        const parts = gitUrl.replace(/\.git$/, '').split(/[\\/]/);
         const name = parts[parts.length - 1] || 'unnamed-project';
         const rawSlug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
         let slug = rawSlug;

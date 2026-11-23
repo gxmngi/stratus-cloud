@@ -48,6 +48,12 @@ test.describe('Project ownership', () => {
         assert.equal(listUnownedProjects().length, 1);
     });
 
+    test('owned Windows projects use the final directory name', () => {
+        const project = getOrCreateOwnedProject('alice', 'C:\\Users\\Developer\\projects\\demo-server');
+        assert.equal(project?.name, 'demo-server');
+        assert.equal(project?.slug, 'demo-server');
+    });
+
     test('two owners can use the same repository with separate project IDs and globally unique slugs', () => {
         const repo = 'https://github.com/example/shared.git';
         const first = getOrCreateOwnedProject('alice', repo)!;
