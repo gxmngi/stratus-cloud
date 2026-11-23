@@ -6,6 +6,7 @@
     "dev:auth": "node scripts/dev-stack.mjs --auth-only",
     "test:deploy": "node scripts/smoke-deploy.mjs",
     "test:deploy:dynamic": "node scripts/smoke-dynamic.mjs",
-    "test:recovery": "node scripts/smoke-recovery.mjs"
+    "test:recovery": "node scripts/smoke-recovery.mjs",
+    "test:workspace": "node scripts/smoke-workspace.mjs"
   }
 }

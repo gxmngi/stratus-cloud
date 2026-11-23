@@ -5,15 +5,17 @@ import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { API_URL, apiFetch, logStreamUrl } from "@/lib/api";
 
-
 interface TerminalProps {
   deploymentId: string;
   onStatusChange?: (status: "QUEUED" | "BUILDING" | "READY" | "FAILED") => void;
 }
 
-export default function Terminal({ deploymentId, onStatusChange }: TerminalProps) {
+export default function Terminal({
+  deploymentId,
+  onStatusChange,
+}: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
-  
+
   // ใช้ Ref เก็บ Callback เพื่อป้องกัน useEffect re-trigger เมื่อ Parent Component re-render
   const onStatusChangeRef = useRef(onStatusChange);
   useEffect(() => {
@@ -28,11 +30,12 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
 
     const term = new XTerminal({
       theme: {
-        background: "#0d1117",
-        foreground: "#c9d1d9",
+        background: "#152038",
+        foreground: "#cbd6e9",
         cursor: "#58a6ff",
         selectionBackground: "#3b4252",
-        black: "#484f58",
+        black: "#8798b5",
+        brightBlack: "#97a6be",
         red: "#ff7b72",
         green: "#3fb950",
         yellow: "#d29922",
@@ -41,16 +44,27 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         cyan: "#39c5cf",
         white: "#b1bac4",
       },
+      minimumContrastRatio: 4.5,
       fontSize: 13,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace',
+      fontFamily:
+        "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
       cursorBlink: true,
       convertEol: true,
       disableStdin: true,
-      rows: 16,
+      rows: 12,
+      cols: 80,
     });
 
     term.open(terminalRef.current);
-    term.writeln(`\x1b[36m[STRATUS]\x1b[0m Loading log buffer for \x1b[33m${deploymentId}\x1b[0m...`);
+    const resize = new ResizeObserver(() => {
+      const width = terminalRef.current?.clientWidth || 0;
+      if (width > 40)
+        term.resize(Math.max(16, Math.floor((width - 32) / 7.85)), 12);
+    });
+    resize.observe(terminalRef.current);
+    term.writeln(
+      `\x1b[36m[STRATUS]\x1b[0m Loading log buffer for \x1b[33m${deploymentId}\x1b[0m...`,
+    );
 
     let isSubscribed = true;
     let ws: WebSocket | null = null;
@@ -58,7 +72,12 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
     // 1. Fetch persisted logs from SQLite first (Instant Log Replay)
     apiFetch(`${API_URL}/api/deployments/${deploymentId}/logs`)
       .then((res) => {
-        if (!res.ok) throw new Error(res.status === 401 ? "Sign in to view deployment logs" : "Logs unavailable");
+        if (!res.ok)
+          throw new Error(
+            res.status === 401
+              ? "Sign in to view deployment logs"
+              : "Logs unavailable",
+          );
         return res.json();
       })
       .then((data: { logs: string[] }) => {
@@ -76,13 +95,15 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         ws = new WebSocket(logStreamUrl(deploymentId));
 
         ws.onopen = () => {
-          term.writeln("\x1b[32m[CONNECTED]\x1b[0m Live WebSocket stream connected to Redis Pub/Sub.\n");
-          onStatusChangeRef.current?.("BUILDING");
+          term.writeln(
+            "\x1b[32m[CONNECTED]\x1b[0m Live WebSocket stream connected to Redis Pub/Sub.\n",
+          );
         };
 
         ws.onmessage = (event) => {
           const message = event.data as string;
-          term.write(message.replace(/\n/g, "\r\n"));
+          const output = /^\[(INFO|STATUS|LOGS|ERROR)\]/.test(message) && !message.endsWith("\n") ? message + "\n" : message;
+          term.write(output.replace(/\r?\n/g, "\r\n"));
 
           if (message.includes("[STATUS] READY")) {
             onStatusChangeRef.current?.("READY");
@@ -92,7 +113,9 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         };
 
         ws.onerror = () => {
-          term.writeln(`\x1b[90m[NOTE] Live stream closed or inactive (viewing static log history).\x1b[0m`);
+          term.writeln(
+            `\x1b[90m[NOTE] Live stream closed or inactive (viewing static log history).\x1b[0m`,
+          );
         };
 
         ws.onclose = () => {
@@ -100,28 +123,29 @@ export default function Terminal({ deploymentId, onStatusChange }: TerminalProps
         };
       })
       .catch((err) => {
-        if (isSubscribed) term.writeln(`\r\n[STRATUS] ${err instanceof Error ? err.message : "Logs unavailable"}`);
+        if (isSubscribed)
+          term.writeln(
+            `\r\n[STRATUS] ${err instanceof Error ? err.message : "Logs unavailable"}`,
+          );
       });
 
     return () => {
       isSubscribed = false;
       if (ws) ws.close();
+      resize.disconnect();
       term.dispose();
     };
-  }, [deploymentId]); // พึ่งพาเฉพาะ deploymentId ตัวเดียวเท่านั้น
+  }, [deploymentId]);
 
   return (
-    <div className="w-full rounded-xl overflow-hidden border border-zinc-800 bg-[#0d1117] shadow-2xl">
-      <div className="flex items-center justify-between px-4 py-2.5 bg-zinc-900/90 border-b border-zinc-800 text-xs text-zinc-400 font-mono">
-        <div className="flex items-center gap-2">
-          <div className="w-3 h-3 rounded-full bg-zinc-700"></div>
-          <div className="w-3 h-3 rounded-full bg-zinc-700"></div>
-          <div className="w-3 h-3 rounded-full bg-zinc-700"></div>
-          <span className="ml-2 text-zinc-300">build-terminal :: {deploymentId}</span>
-        </div>
-        <span className="text-zinc-500">xterm.js engine</span>
-      </div>
-      <div ref={terminalRef} className="p-3" />
-    </div>
+    <section className="build-terminal" aria-label="Build logs">
+      <header>
+        <span>
+          <span className="terminal-dot" /> Build logs
+        </span>
+        <code>{deploymentId}</code>
+      </header>
+      <div ref={terminalRef} className="terminal-content" />
+    </section>
   );
 }
