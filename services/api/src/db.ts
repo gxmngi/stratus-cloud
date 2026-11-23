@@ -81,6 +81,8 @@ export function initDatabase() {
 
         CREATE INDEX IF NOT EXISTS idx_deployments_created_at ON deployments(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
+        CREATE INDEX IF NOT EXISTS idx_deployments_pending ON deployments(id)
+            WHERE status IN ('QUEUED', 'BUILDING');
         CREATE INDEX IF NOT EXISTS idx_logs_deployment_id ON deployment_logs(deployment_id, id ASC);
     `);
 
@@ -132,6 +134,12 @@ export interface LogRecord {
     message: string;
     created_at: number;
 }
+
+export type DeploymentBuildOutcome = (
+    | { status: 'READY'; runtimeType: 'static'; port: null }
+    | { status: 'READY'; runtimeType: 'dynamic'; port: number }
+    | { status: 'FAILED'; error: string }
+) & { completedAt?: number };
 
 export const dbService = {
     getOrCreateProject(gitUrl: string): ProjectRecord {
@@ -274,12 +282,35 @@ export const dbService = {
         `).run(payload);
     },
 
-    updateDeploymentRuntime(id: string, runtimeType: 'static' | 'dynamic', port?: number): void {
-        db.prepare(`
-            UPDATE deployments 
-            SET runtime_type = ?, container_port = ?
-            WHERE id = ?
-        `).run(runtimeType, port || null, id);
+    getPendingDeploymentIds(afterId: string, limit: number): string[] {
+        return (db.prepare(`
+            SELECT id FROM deployments
+            WHERE id > ? AND status IN ('QUEUED', 'BUILDING')
+            ORDER BY id LIMIT ?
+        `).all(afterId, limit) as Pick<DeploymentRecord, 'id'>[]).map(row => row.id);
+    },
+
+    completeDeploymentBuild(id: string, outcome: DeploymentBuildOutcome):
+        { slug: string; deployment: DeploymentRecord } | undefined {
+        return db.transaction(() => {
+            const now = Date.now();
+            const completedAt = outcome.completedAt ?? now;
+            const ready = outcome.status === 'READY';
+            const deployment = db.prepare(`
+                UPDATE deployments SET status = ?, runtime_type = COALESCE(?, runtime_type),
+                    container_port = ?, error_message = ?, completed_at = ?, duration_ms = MAX(0, ? - created_at)
+                WHERE id = ? AND status IN ('QUEUED', 'BUILDING') RETURNING *
+            `).get(outcome.status, ready ? outcome.runtimeType : null, ready ? outcome.port : null,
+                ready ? null : outcome.error, completedAt, completedAt, id) as DeploymentRecord | undefined;
+            if (!ready || !deployment?.project_id) return;
+
+            const promotion = db.prepare(`
+                UPDATE projects SET production_deployment_id = ?, updated_at = ?
+                WHERE id = ? AND (production_deployment_id IS NULL OR production_deployment_id = '')
+                RETURNING slug
+            `).get(id, now, deployment.project_id) as Pick<ProjectRecord, 'slug'> | undefined;
+            if (promotion) return { ...promotion, deployment };
+        })();
     },
 
     updateDeploymentStatus(

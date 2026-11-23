@@ -43,6 +43,8 @@ export interface BuildResult {
     runtimeType?: 'static' | 'dynamic';
     containerPort?: number | null;
     error?: string;
+    publicError?: string;
+    completedAt?: number;
 }
 
 /**

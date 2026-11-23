@@ -162,16 +162,17 @@ The check builds two distinct static releases, checks their served content,
 verifies owner isolation, promotes and rolls back the project alias, then removes
 the superseded preview while preserving the active deployment.
 
-### Verify worker crash recovery
+### Verify worker and API crash recovery
 
 ```powershell
 npm run test:recovery
 ```
 
-This isolated Docker check kills a worker mid-build, verifies recovery to READY,
-and redelivers the job to confirm the runtime is preserved. It cleans up its test
-resources and leaves the local stack running. See [Build recovery](docs/build-recovery.md)
-for retry policy, Redis integration tests and remaining recovery limits.
+This isolated Docker check kills a worker mid-build and redelivers its finished
+job to confirm the runtime is preserved. It also stops the API during a separate
+build, then checks that the restarted API reports READY and the preview serves
+the expected content. See [Build recovery](docs/build-recovery.md) for prerequisites,
+retry policy and recovery limits.
 
 ---
 

@@ -1,6 +1,13 @@
 import type Redis from 'ioredis';
 import type { BuildOptions, BuildResult } from './builder';
 import { postCommitStatus, type WebhookMeta } from './github';
+import { maskSecrets } from './mask';
+
+export function buildFailureMessage(job: BuildOptions, result: BuildResult): string {
+    if (result.publicError) return result.publicError;
+    const values = Object.values(job.env || {}).filter(value => typeof value === 'string' && value.length > 0);
+    return maskSecrets(job.deploymentId, result.error || 'Build failed', values);
+}
 
 // Called only after the result is durably journalled. Redelivery replays these
 // notifications rather than rebuilding or replacing a ready runtime.
@@ -13,11 +20,7 @@ export async function publishBuildResult(redis: Redis, job: BuildOptions, result
         await redis.publish('proxy:routes', JSON.stringify({ action: 'set', subdomain: job.deploymentId,
             type: result.runtimeType, ...(result.containerPort ? { port: result.containerPort } : {}) }));
     }
-    let error = result.error || 'Build failed';
-    for (const value of Object.values(job.env || {})) {
-        if (typeof value === 'string' && value) error = error.split(value).join('***');
-    }
-    await redis.publish(channel, result.success ? '[STATUS] READY' : `[STATUS] FAILED: ${error}`);
+    await redis.publish(channel, result.success ? '[STATUS] READY' : `[STATUS] FAILED: ${buildFailureMessage(job, result)}`);
     const meta = job as BuildOptions & Partial<WebhookMeta>;
     if (meta.repository && meta.commitSha) {
         await postCommitStatus(meta.repository, meta.commitSha, result.success ? 'success' : 'failure',

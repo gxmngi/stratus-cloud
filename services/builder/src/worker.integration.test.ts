@@ -87,8 +87,13 @@ test('Redis worker recovery and duplicate delivery', { skip: !url }, async t => 
             const before = builds;
             await assert.rejects(failing.handle(entry), /Disconnected/);
             assert.equal((await redis.xpending(options.stream, options.group))[0], 1);
+            const resultKey = `${prefix}:dep-delivery:result`;
+            const committed = await redis.get(resultKey);
+            assert.ok(committed);
+            assert.ok(Number.isSafeInteger(JSON.parse(committed).completedAt));
             await worker.handle(entry);
             assert.equal(builds - before, 1);
+            assert.equal(await redis.get(resultKey), committed);
             assert.equal((await redis.xpending(options.stream, options.group))[0], 0);
         });
         await t.test('expired owner cannot commit or release a replacement lease', async () => {
@@ -116,8 +121,25 @@ test('Redis worker recovery and duplicate delivery', { skip: !url }, async t => 
             await failing.handle(entry);
             const result = JSON.parse((await redis.get(`${prefix}:dep-retries:result`))!);
             assert.equal(result.success, false);
-            assert.match(result.error, /2 attempts/);
+            assert.match(result.publicError, /2 attempts/);
             assert.equal((await redis.xpending(options.stream, options.group))[0], 0);
+        });
+        await t.test('failed build journals store the masked error for delivery and recovery', async () => {
+            const deploymentId = 'dep-masked-failure';
+            const secret = 'fixture-value-for-journal-redaction';
+            const encodedSecret = Buffer.from(secret).toString('base64');
+            await redis.xadd(options.stream, '*', 'job', JSON.stringify({ deploymentId, gitUrl: 'fixture',
+                env: { FIXTURE_SECRET: secret } }));
+            const [[, [entry]]] = await take();
+            const failing = new BuildWorker(reader, redis, options, { ...hooks, build: async () => ({
+                success: false, exitCode: 1, artifactPath: null, error: `Build failed using ${secret} and ${encodedSecret}`,
+            }) });
+            await failing.handle(entry);
+            const { completedAt, ...result } = JSON.parse((await redis.get(`${prefix}:${deploymentId}:result`))!);
+            assert.ok(Number.isSafeInteger(completedAt));
+            assert.deepEqual(result, {
+                success: false, exitCode: 1, artifactPath: null, publicError: 'Build failed using *** and ***',
+            });
         });
         await t.test('invalid jobs are acknowledged into a secret-free dead letter stream', async () => {
             await redis.xadd(options.stream, '*', 'job', '{"env":{"SECRET":"do-not-copy"}}');

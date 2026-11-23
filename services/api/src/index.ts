@@ -10,6 +10,7 @@ import { initDatabase, dbService, DeploymentRecord } from './db';
 import { createAuthRouter } from './auth';
 import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
+import { createBuildResultRecovery } from './build-result-recovery';
 
 const app = express();
 
@@ -71,6 +72,17 @@ redisPublisher.on('error', (err) => {
     console.error('[REDIS] API Publisher connection error:', err.message);
 });
 
+const buildResults = createBuildResultRecovery(redisPublisher,
+    process.env.BUILD_NAMESPACE || 'stratus:build', syncProductionRoute);
+function reconcilePendingBuilds() {
+    if (redisPublisher.status !== 'ready') return;
+    void buildResults.reconcilePending().catch(error => console.error('[RECOVERY] Could not reconcile builds:', error));
+}
+if (!offline) {
+    redisPublisher.on('ready', reconcilePendingBuilds);
+    setInterval(reconcilePendingBuilds, 5000).unref();
+}
+
 // Redis Subscriber สำหรับบันทึก Logs ทุก Deployment ลง SQLite แบบรวมศูนย์
 const redisLogCollector = new Redis({
     lazyConnect: offline,
@@ -93,31 +105,9 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
     try {
         dbService.appendLog(deploymentId, message);
 
-        if (message.includes('Allocated dynamic host port:')) {
-            const match = message.match(/Allocated dynamic host port:\s*(\d+)/);
-            if (match) {
-                const port = parseInt(match[1], 10);
-                dbService.updateDeploymentRuntime(deploymentId, 'dynamic', port);
-            }
-        } else if (message.includes('Static build succeeded')) {
-            dbService.updateDeploymentRuntime(deploymentId, 'static');
-        }
-
-        if (message.includes('[STATUS] READY')) {
-            dbService.updateDeploymentStatus(deploymentId, 'READY');
-            // Auto-promote to production domain alias if this project has no active production deployment yet
-            try {
-                const project = dbService.getProjectByDeployment(deploymentId);
-                const dep = dbService.getDeployment(deploymentId);
-                if (project && !project.production_deployment_id && dep) {
-                    dbService.setProjectProductionDeployment(project.id, deploymentId);
-                    syncProductionRoute(project.slug, dep);
-                }
-            } catch (autoPromoteErr) {
-                console.error(`[AUTO-PROMOTE] Error auto-promoting ${deploymentId}:`, autoPromoteErr);
-            }
-        } else if (message.includes('[STATUS] FAILED')) {
-            dbService.updateDeploymentStatus(deploymentId, 'FAILED', message);
+        if (message === '[STATUS] READY' || message.startsWith('[STATUS] FAILED:')) {
+            void buildResults.reconcile(deploymentId).catch(error =>
+                console.error(`[RECOVERY] Could not reconcile ${deploymentId}:`, error));
         } else if (message.includes('Initializing build environment')) {
             dbService.updateDeploymentStatus(deploymentId, 'BUILDING');
         }

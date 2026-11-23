@@ -1,6 +1,7 @@
 import Redis from 'ioredis';
 import { randomUUID } from 'node:crypto';
 import type { BuildOptions, BuildResult } from './builder';
+import { buildFailureMessage } from './result';
 
 export const owned = `if redis.call('GET', KEYS[1]) == ARGV[1] then return 1 else return 0 end`;
 const renew = `if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('PEXPIRE', KEYS[1], ARGV[2]) else return 0 end`;
@@ -107,8 +108,12 @@ export class BuildWorker {
                     result = await this.hooks.build(job, assertLease);
                 }
                 await assertLease();
-                if (!result.success) await this.hooks.cleanup(job.deploymentId);
+                if (!result.success) {
+                    await this.hooks.cleanup(job.deploymentId);
+                    result = { ...result, publicError: buildFailureMessage(job, result), error: undefined };
+                }
                 await assertLease();
+                result = { ...result, completedAt: Date.now() };
                 if (Number(await this.control.eval(finish, 2, lock, resultKey, token, JSON.stringify(result))) !== 1) {
                     this.hooks.leaseLost();
                     throw new Error('Cannot commit build result after lease loss');

@@ -1,4 +1,4 @@
-# Build worker recovery
+# Build and API recovery
 
 The worker uses Redis Streams with at-least-once delivery. Builds interrupted by
 a worker crash restart from the beginning; they do not resume a package manager
@@ -51,6 +51,17 @@ records FAILED and acknowledges the message. Invalid payloads are acknowledged
 into the bounded `stream:build:dead` stream with their source ID and a generic
 reason, without copying user environment secrets.
 
+## API restart and missed notifications
+
+The API uses terminal notifications as hints to read the stored build result.
+On startup and periodically, it also checks queued and building deployments for
+stored results. It writes the terminal state and runtime metadata together in
+SQLite. New journal entries carry the worker's completion time so API downtime
+does not inflate build duration. Reading the same result again preserves the
+existing completion time.
+Set the same `BUILD_NAMESPACE` on the API and worker when overriding the default
+`stratus:build` namespace.
+
 ## Verification
 
 Run the fast tests against a disposable test Redis or a local Redis instance:
@@ -66,14 +77,14 @@ Integration tests use unique key namespaces and remove only those keys. Without
 `REDIS_TEST_URL`, Redis integration tests are skipped. CI provides Redis and runs
 them explicitly.
 
-From the repository root, with Docker's Linux engine and the `node:20-alpine` and
-`redis:7-alpine` images available:
+From the repository root, with Go 1.26+, Docker's Linux engine, and the
+`node:20-alpine` and `redis:7-alpine` images available:
 
 ```powershell
 npm run test:recovery
 ```
 
-This starts an isolated Redis container, API database, workspace and worker. It
+This starts an isolated Redis container, API database, workspace, worker and proxy. It
 queues a real Docker build, kills the worker while its sandbox runs, immediately
 starts a replacement and verifies:
 
@@ -82,16 +93,19 @@ starts a replacement and verifies:
 - duplicate delivery preserves the runtime container ID and build attempt count;
 - no stream messages remain pending.
 
+It also stops the API before a second build can finish, waits for the worker to
+acknowledge the job, and restarts the API. It checks READY with runtime metadata,
+the preview and first production URL through the proxy, and that the worker kept
+the original runtime and attempt count.
+
 The check removes its processes, labelled test containers and temporary workspace,
 and saves `services/data/build-recovery-report.json` (ignored by Git). It does not
 stop or change the user's local stack. CI runs this check in the builder job.
 
 ## Limits and next checks
 
-Status/log/route delivery still uses Redis Pub/Sub. The completion journal makes
-worker redelivery safe, but acknowledgement does not confirm SQLite consumption.
-Simultaneous API outages, Redis data loss, proxy reconciliation after restart and
-multi-host deployment require separate durable event/reconciliation work. Existing
-containers created before ownership labels were introduced require operator
-inspection if an old unacknowledged job refers to them; recovery refuses to delete
-them automatically.
+The completion journal recovers API state while Redis retains the result.
+Log messages and route updates still use Redis Pub/Sub. Redis data loss, proxy
+route reconciliation after restart and multi-host deployment remain outside this
+recovery path. Existing containers created before ownership labels were introduced
+require operator inspection if an old unacknowledged job refers to them.

@@ -53,11 +53,18 @@ jobs:
         working-directory: services/api
         run: npm ci
 
+      - name: Set up Go for recovery preview check
+        if: matrix.service == 'builder'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: services/proxy/go.mod
+          cache-dependency-path: services/proxy/go.sum
+
       - name: Pull recovery check images
         if: matrix.service == 'builder'
         run: docker pull node:20-alpine
 
-      - name: Verify worker crash recovery with Docker
+      - name: Verify worker and API crash recovery with Docker
         if: matrix.service == 'builder'
         working-directory: .
         run: npm run test:recovery
