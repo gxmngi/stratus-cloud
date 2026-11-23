@@ -67,7 +67,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         });
         attachLogStream(server, origin, () => {
             const subscriber = new EventEmitter();
-            Object.assign(subscriber, { subscribe: async () => 1, disconnect: () => { calls.push('disconnect'); } });
+            Object.assign(subscriber, { subscribe: async () => 1, disconnect: () => subscriber.emit('disconnected') });
             subscribers.push(subscriber);
             return subscriber as Redis;
         });
@@ -171,7 +171,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         assert.equal(subscribers.length, before);
     });
 
-    test('owner receives logs, then revocation blocks messages and disconnects the stream', async () => {
+    test('owner receives logs, then revocation blocks messages and disconnects the stream', { timeout: 4000 }, async () => {
         const session = createSession('alice');
         const ws = new WebSocket(base.replace('http:', 'ws:') + '/api/logs?deploymentId=owned-dep', {
             headers: { Origin: origin, Cookie: `stratus_session=${session.token}` }, handshakeTimeout: 3000,
@@ -186,8 +186,10 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             let leaked = false;
             ws.on('message', () => { leaked = true; });
             const closed = new Promise<number>(resolve => ws.once('close', code => resolve(code)));
+            const disconnected = new Promise<void>(resolve => subscriber.once('disconnected', resolve));
             subscriber.emit('message', 'logs:owned-dep', 'must not leak');
             assert.equal(await closed, 1008);
+            await disconnected;
             assert.equal(leaked, false);
         } finally { ws.terminate(); }
     });
