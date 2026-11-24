@@ -72,7 +72,7 @@ async function prepareDocker() {
     }
     if (!ready) throw new Error('Docker Linux engine is unavailable. Open Docker Desktop and resolve the startup error, then retry.');
     if (command('docker', ['version', '--format', '{{.Server.Os}}']) !== 'linux') throw new Error('Switch Docker Desktop to Linux containers.');
-    for (const image of ['redis:7-alpine', 'node:20-alpine']) {
+    for (const image of ['redis:7-alpine', 'node:22-alpine']) {
         try { command('docker', ['image', 'inspect', image]); }
         catch { console.log(`[LOCAL] Pulling ${image}`); command('docker', ['pull', image], { timeout: 600000, stdio: 'inherit' }); }
     }

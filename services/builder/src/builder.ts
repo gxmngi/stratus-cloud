@@ -1,5 +1,5 @@
 import Docker from 'dockerode';
-import simpleGit from 'simple-git';
+import { simpleGit } from 'simple-git';
 import path from 'path';
 import fs from 'fs';
 import Redis from 'ioredis';
@@ -10,6 +10,7 @@ import { resolveDeploymentWorkspace } from './workspace';
 import { reservedRuntimePorts } from './runtime-ports';
 
 const docker = new Docker();
+const NODE_IMAGE = 'node:22-alpine';
 
 // WORKSPACE_DIR: path ภายใน Process นี้ (ใน Container คือ /workspace)
 // HOST_WORKSPACE_PATH: path เดียวกันบน Host ที่ Docker Engine มองเห็น ใช้สำหรับ Bind Mount ของ Sandbox
@@ -224,7 +225,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
 
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = hostCodeDir.replace(/\\/g, '/');
-    await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: node:20-alpine)`);
+    await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: ${NODE_IMAGE})`);
     const SYSTEM_ENV_BLOCKLIST = new Set([
         'AWS_ACCESS_KEY_ID',
         'AWS_SECRET_ACCESS_KEY',
@@ -261,7 +262,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         container = await docker.createContainer({
             name: `stratus-build-${deploymentId}`,
             Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'build' },
-            Image: 'node:20-alpine',
+            Image: NODE_IMAGE,
             Cmd: ['sh', '-c', effectiveBuildCommand],
             WorkingDir: '/app',
             Env: formattedEnv, // <-- ฉีด Environment Variables เข้าไปใน Container
@@ -391,7 +392,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             runContainer = await docker.createContainer({
                 name: `stratus-${deploymentId}`,
                 Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'runtime' },
-                Image: 'node:20-alpine',
+                Image: NODE_IMAGE,
                 Cmd: ['sh', '-c', startCmd],
                 WorkingDir: '/app',
                 Env: [

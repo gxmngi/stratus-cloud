@@ -1,7 +1,7 @@
 # Real local deployment
 
 Run the complete local stack from the repository root with `npm run dev`.
-The command requires Node.js 22, Go 1.26+, Docker Desktop with Linux containers, and
+The command requires Node.js 22, Go 1.27.4+, Docker Desktop with Linux containers, and
 dependencies installed with `npm ci` in `services/api`, `services/builder` and
 `apps/web`. On Windows, the launcher uses the active Docker context's named pipe
 and passes the same absolute workspace path to API, builder and proxy.

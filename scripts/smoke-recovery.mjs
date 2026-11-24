@@ -16,6 +16,7 @@ const runId = randomUUID();
 const testRoot = path.join(root, 'services/data', `recovery-${runId}`);
 const fixture = path.join(testRoot, 'fixture');
 const apiRecoveryFixture = path.join(testRoot, 'api-recovery-fixture');
+const gitStaticFixture = path.join(testRoot, 'git-static-fixture');
 const workspace = path.join(testRoot, 'workspace');
 const redisName = `stratus-recovery-${runId}`;
 const buildNamespace = 'stratus:build:smoke-recovery';
@@ -115,7 +116,8 @@ const gate = setInterval(() => {
 `);
     writeFileSync(path.join(fixture, 'server.js'), `require('http').createServer((req,res)=>{
         res.setHeader('Content-Type','application/json');
-        res.end(JSON.stringify({deploymentId:process.env.STRATUS_DEPLOYMENT_ID}));
+        res.end(JSON.stringify({deploymentId:process.env.STRATUS_DEPLOYMENT_ID,
+            nodeMajor:Number(process.versions.node.split('.')[0])}));
     }).listen(3000,'0.0.0.0');\n`);
     cpSync(fixture, apiRecoveryFixture, { recursive: true });
     const dockerHost = command(['context', 'inspect', '--format', '{{.Endpoints.docker.Host}}']);
@@ -229,7 +231,7 @@ const gate = setInterval(() => {
     assert.equal(recovered.completed_at, savedResult.completedAt);
     const preview = await requestPreview(proxyPort, apiRecoveryId);
     assert.equal(preview.status, 200);
-    assert.deepEqual(JSON.parse(preview.body), { deploymentId: apiRecoveryId });
+    assert.deepEqual(JSON.parse(preview.body), { deploymentId: apiRecoveryId, nodeMajor: 22 });
     const { projects } = await (await request('/api/projects')).json();
     const project = projects.find(project => project.id === recovered.project_id);
     assert.equal(project?.production_deployment_id, apiRecoveryId);
@@ -241,10 +243,38 @@ const gate = setInterval(() => {
     assert.equal(await redis.get(`${buildNamespace}:${apiRecoveryId}:attempts`), '1');
     console.log('[PASS] Restarted API restored READY, preview, and first production route without rebuilding');
 
+    mkdirSync(gitStaticFixture);
+    writeFileSync(path.join(gitStaticFixture, 'build.js'), `const fs = require('node:fs');
+fs.mkdirSync('dist');
+fs.chmodSync('dist', 0o777);
+fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versions.node);
+`);
+    const gitOptions = { cwd: gitStaticFixture, windowsHide: true, timeout: 15000 };
+    execFileSync('git', ['init', '--quiet', '--template='], gitOptions);
+    execFileSync('git', ['add', '--', 'build.js'], gitOptions);
+    execFileSync('git', ['-c', 'user.name=Stratus Smoke', '-c', 'user.email=smoke@example.test',
+        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.git/hooks',
+        'commit', '--quiet', '-m', 'Create static smoke fixture'], gitOptions);
+    const staticBuild = await request('/api/deploy', 'POST', { gitUrl: gitStaticFixture, buildCommand: 'node build.js' });
+    assert.equal(staticBuild.status, 202);
+    const staticId = (await staticBuild.json()).deploymentId;
+    deploymentIds.push(staticId);
+    const staticDeployment = await until(async () => {
+        const { deployment } = await (await request(`/api/deployments/${staticId}`)).json();
+        assert.notEqual(deployment.status, 'FAILED', JSON.stringify(deployment));
+        return deployment.status === 'READY' ? deployment : null;
+    }, 'Git static fixture reaches READY');
+    assert.equal(staticDeployment.runtime_type, 'static');
+    const staticPreview = await requestPreview(proxyPort, staticId);
+    assert.equal(staticPreview.status, 200);
+    assert.match(staticPreview.body, /^Stratus Git smoke on Node 22\.\d+\.\d+$/);
+    console.log('[PASS] Cloned a Git fixture, built on Node 22, and served its static preview');
+
     const report = { checkedAt: new Date().toISOString(), deploymentId, status: completed.status,
         attempts: 2, orphanRemoved: true, pending: 0, duplicatePreservedRuntime: true,
         runtimeId: runtime.Id, isolatedFromUserStack: true,
-        apiRecovery: { deploymentId: apiRecoveryId, status: recovered.status, previewStatus: preview.status, attempts: 1 } };
+        apiRecovery: { deploymentId: apiRecoveryId, status: recovered.status, previewStatus: preview.status, attempts: 1 },
+        gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status } };
     writeFileSync(path.join(root, 'services/data/build-recovery-report.json'), JSON.stringify(report, null, 2) + '\n');
 } catch (error) {
     console.error(logs.slice(-30).join(''));

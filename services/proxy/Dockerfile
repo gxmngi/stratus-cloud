@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-FROM golang:1.26-alpine AS build
+FROM golang:1.27.4-alpine AS build
 ENV GOTOOLCHAIN=local
 
 WORKDIR /src
@@ -11,7 +11,7 @@ COPY *.go ./
 
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/stratus-proxy .
 
-FROM alpine:3.20
+FROM alpine:3.24.4
 
 # ca-certificates จำเป็นสำหรับ Let's Encrypt (ACME) ในเฟสถัดไป
 RUN apk add --no-cache ca-certificates \

@@ -18,6 +18,6 @@
     "@types/dockerode": "^4.0.1",
     "dockerode": "^5.0.1",
     "ioredis": "^6.0.0",
-    "simple-git": "^3.36.0"
+    "simple-git": "^4.1.0"
   }
 }
