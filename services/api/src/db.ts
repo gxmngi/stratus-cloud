@@ -94,6 +94,14 @@ export function initDatabase() {
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
     addProjectOwnership(db);
+    db.exec(`
+        CREATE TABLE IF NOT EXISTS github_deliveries (
+            project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            delivery_id TEXT NOT NULL,
+            job_json TEXT NOT NULL,
+            PRIMARY KEY(project_id, delivery_id)
+        )
+    `);
     if (!(db.pragma('table_info(projects)') as { name: string }[]).some(column => column.name === 'production_route_revision')) {
         db.exec('ALTER TABLE projects ADD COLUMN production_route_revision INTEGER NOT NULL DEFAULT 0');
     }

@@ -15,6 +15,17 @@ import { githubWebhookHandler } from './github';
 import { createHmac } from 'node:crypto';
 
 const origin = 'http://localhost:3000';
+const webhookSecret = 'test-webhook-secret';
+const webhookCommit = 'a'.repeat(40);
+
+function signedPush(body: string, delivery?: string) {
+    return {
+        'Content-Type': 'application/json',
+        'x-github-event': 'push',
+        'x-hub-signature-256': 'sha256=' + createHmac('sha256', webhookSecret).update(body).digest('hex'),
+        ...(delivery ? { 'X-GitHub-Delivery': delivery } : {}),
+    };
+}
 
 test.describe('Owner authorization over HTTP and WebSocket', () => {
     let server: Server;
@@ -22,10 +33,28 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     let alice: string;
     let bob: string;
     let projectId: string;
+    let webhookId = 0;
+    let enqueueFailure: 'before' | 'after' | undefined;
     const calls: string[] = [];
+    const webhookReceipts = new Map<string, string>();
+    const queuedWebhookJobs: { deploymentId: string; commitSha: string }[] = [];
     const subscribers: EventEmitter[] = [];
     const publisher = {
         xadd: async () => { calls.push('queue'); return '1-0'; },
+        eval: async (_script: string, _keyCount: number, _stream: string, key: string, payload: string) => {
+            const failure = enqueueFailure;
+            enqueueFailure = undefined;
+            if (failure === 'before') throw new Error('Test Redis unavailable');
+            let receipt = webhookReceipts.get(key);
+            if (!receipt) {
+                queuedWebhookJobs.push(JSON.parse(payload));
+                calls.push('queue');
+                receipt = `${queuedWebhookJobs.length}-0`;
+                webhookReceipts.set(key, receipt);
+            }
+            if (failure === 'after') throw new Error('Test lost Redis response');
+            return receipt;
+        },
         rpush: async () => { throw new Error('Jobs must not be duplicated into the legacy queue'); },
     } as unknown as Redis;
     const request = (route: string, cookie?: string, method = 'GET', body?: unknown, source = origin) => fetch(base + route, {
@@ -52,7 +81,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             status: 'READY', live_url: 'http://legacy-dep.localhost:8000', created_at: 1 });
         const app = express();
         app.post(['/api/webhooks/github', '/api/webhooks/github/:projectId'], express.raw({ type: 'application/json' }),
-            githubWebhookHandler(publisher, () => `webhook-dep-${calls.length}`));
+            githubWebhookHandler(publisher, () => `dep-webhook-${++webhookId}`));
         app.use(express.json());
         app.use('/api', createProjectRouter({
             publisher, dashboardOrigin: origin, workspaceDir: process.env.TEST_WORKSPACE_DIR!, port: 4000,
@@ -217,10 +246,9 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     test('webhooks require a specific project when multiple owners use the same repo', async () => {
         const oldSecret = process.env.GITHUB_WEBHOOK_SECRET;
         process.env.GITHUB_WEBHOOK_SECRET = 'test-webhook-secret';
-        const body = JSON.stringify({ ref: 'refs/heads/main', after: 'abc123',
+        const body = JSON.stringify({ ref: 'refs/heads/main', after: webhookCommit,
             repository: { clone_url: 'https://github.com/example/alice.git', full_name: 'example/alice' } });
-        const headers = { 'Content-Type': 'application/json', 'x-github-event': 'push',
-            'x-hub-signature-256': 'sha256=' + createHmac('sha256', 'test-webhook-secret').update(body).digest('hex') };
+        const headers = signedPush(body, '00000000-0000-4000-8000-000000000101');
         try {
             const before = calls.length;
             const ambiguous = await fetch(base + '/api/webhooks/github', { method: 'POST', headers, body });
@@ -236,6 +264,49 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
                 method: 'POST', headers: { 'Content-Type': 'application/json' }, body,
             });
             assert.equal(unsigned.status, 401);
+        } finally {
+            if (oldSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
+            else process.env.GITHUB_WEBHOOK_SECRET = oldSecret;
+        }
+    });
+
+    test('applicable pushes validate identity and retry the reserved build without enqueueing twice', async () => {
+        const oldSecret = process.env.GITHUB_WEBHOOK_SECRET;
+        process.env.GITHUB_WEBHOOK_SECRET = webhookSecret;
+        const delivery = '00000000-0000-4000-8000-000000000102';
+        const before = queuedWebhookJobs.length;
+        const send = (sha: string, id?: string) => {
+            const body = JSON.stringify({ ref: 'refs/heads/main', after: sha,
+                repository: { clone_url: 'https://github.com/example/alice.git', full_name: 'example/alice' } });
+            return fetch(base + `/api/webhooks/github/${projectId}`, { method: 'POST', headers: signedPush(body, id), body });
+        };
+        try {
+            assert.equal((await send(webhookCommit)).status, 400);
+            assert.equal((await send(webhookCommit, 'invalid')).status, 400);
+            assert.equal((await send('abc123', delivery)).status, 400);
+
+            enqueueFailure = 'before';
+            const unavailable = await send(webhookCommit, delivery);
+            assert.equal(unavailable.status, 503);
+            const { deploymentId } = await unavailable.json();
+            assert.equal(dbService.getDeployment(deploymentId)?.commit_sha, webhookCommit);
+            assert.equal(queuedWebhookJobs.length, before);
+
+            enqueueFailure = 'after';
+            const lostReply = await send(webhookCommit, delivery);
+            assert.equal(lostReply.status, 503);
+            assert.equal((await lostReply.json()).deploymentId, deploymentId);
+
+            const duplicates = await Promise.all([send(webhookCommit, delivery), send(webhookCommit, delivery)]);
+            for (const duplicate of duplicates) {
+                assert.equal(duplicate.status, 202);
+                assert.equal((await duplicate.json()).deploymentId, deploymentId);
+            }
+            assert.equal((await send('b'.repeat(40), delivery)).status, 409);
+            const jobs = queuedWebhookJobs.slice(before);
+            assert.equal(jobs.length, 1);
+            assert.equal(jobs[0].deploymentId, deploymentId);
+            assert.equal(jobs[0].commitSha, webhookCommit);
         } finally {
             if (oldSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
             else process.env.GITHUB_WEBHOOK_SECRET = oldSecret;
