@@ -14,7 +14,7 @@ services:
       retries: 5
 
   api:
-    image: ghcr.io/gxmngi/stratus-api:latest
+    image: ghcr.io/gxmngi/stratus-api:${STRATUS_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       PORT: "4000"
@@ -37,7 +37,7 @@ services:
       retries: 3
 
   builder:
-    image: ghcr.io/gxmngi/stratus-builder:latest
+    image: ghcr.io/gxmngi/stratus-builder:${STRATUS_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       REDIS_HOST: redis
@@ -54,7 +54,7 @@ services:
         condition: service_healthy
 
   proxy:
-    image: ghcr.io/gxmngi/stratus-proxy:latest
+    image: ghcr.io/gxmngi/stratus-proxy:${STRATUS_IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "80:80"
@@ -81,7 +81,7 @@ services:
       retries: 3
 
   web:
-    image: ghcr.io/gxmngi/stratus-web:latest
+    image: ghcr.io/gxmngi/stratus-web:${STRATUS_IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       PORT: "3000"

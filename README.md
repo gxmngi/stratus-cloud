@@ -162,6 +162,9 @@ The check builds two distinct static releases, checks their served content,
 verifies owner isolation, promotes and rolls back the project alias, then removes
 the superseded preview while preserving the active deployment.
 
+To run the published images on a Linux host, follow the
+[Linux Compose installation guide](docs/linux-compose-install.md).
+
 ### Verify worker and API crash recovery
 
 ```powershell
