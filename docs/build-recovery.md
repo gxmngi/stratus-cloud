@@ -118,9 +118,11 @@ The proxy loads the saved routes independently of Pub/Sub. A successful promote
 or rollback response confirms the saved selection. Check the production URL
 to verify what the proxy serves.
 
-Restore SQLite and Redis from the same backup point. If only SQLite is
-restored, stop the API and proxy, clear the `stratus:production-routes` hash,
-then restart both so the API can rebuild the hash from SQLite.
+Restore SQLite and Redis from the same backup point. For a SQLite-only restore,
+stop the API and proxy, clear the `stratus:production-routes` hash, and remove
+generated `alias.json` files from the proxy workspace so aliases absent from the
+restored database cannot return from disk. Start the API, let it rebuild the
+hash from SQLite, then start the proxy and verify the production URLs.
 
 Scale-to-zero is disabled by default because preview and production can share a
 runtime. The experimental `ENABLE_SCALE_TO_ZERO=1` proxy setting enables it for
