@@ -1,4 +1,4 @@
-FROM node:20-alpine
+FROM node:22-alpine
 
 # git สำหรับ simple-git, docker-cli สำหรับสั่ง Docker Engine ของ Host ผ่าน /var/run/docker.sock
 RUN apk add --no-cache git docker-cli

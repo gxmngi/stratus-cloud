@@ -77,8 +77,8 @@ Integration tests use unique key namespaces and remove only those keys. Without
 `REDIS_TEST_URL`, Redis integration tests are skipped. CI provides Redis and runs
 them explicitly.
 
-From the repository root, with Go 1.26+, Docker's Linux engine, and the
-`node:20-alpine` and `redis:7-alpine` images available:
+From the repository root, with Go 1.27.4+, Git, Docker's Linux engine, and the
+`node:22-alpine` and `redis:7-alpine` images available:
 
 ```powershell
 npm run test:recovery
@@ -96,7 +96,9 @@ starts a replacement and verifies:
 It also stops the API before a second build can finish, waits for the worker to
 acknowledge the job, and restarts the API. It checks READY with runtime metadata,
 the preview and first production URL through the proxy, and that the worker kept
-the original runtime and attempt count.
+the original runtime and attempt count. A static fixture also verifies Git clone,
+the Node 22 build image, and the served preview. The dynamic preview verifies
+that the runtime also uses Node 22.
 
 The check removes its processes, labelled test containers and temporary workspace,
 and saves `services/data/build-recovery-report.json` (ignored by Git). It does not

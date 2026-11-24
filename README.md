@@ -21,7 +21,7 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 ## Key Architectural Highlights
 
 * **Polyglot Monorepo Design:** Clean separation of concerns featuring a Next.js 16 UI, a TypeScript Builder & Orchestrator, and a high-performance edge proxy written in Go.
-* **Isolated Ephemeral Sandboxes & Linux Security Hardening:** Every build executes inside a throwaway Docker container (`node:20-alpine`) with strict resource constraints (1GB RAM, 1GB Swap, 1.0 CPU quota, `PidsLimit: 256` fork-bomb defense), root capability dropping (`CapDrop: ['ALL']`), and `no-new-privileges:true` kernel execution fences.
+* **Isolated Ephemeral Sandboxes & Linux Security Hardening:** Every build executes inside a throwaway Docker container (`node:22-alpine`) with strict resource constraints (1GB RAM, 1GB Swap, 1.0 CPU quota, `PidsLimit: 256` fork-bomb defense), root capability dropping (`CapDrop: ['ALL']`), and `no-new-privileges:true` kernel execution fences.
 * **Intelligent Package Manager Auto-Detection:** Inspects project root files on the fly and dynamically switches between `pnpm`, `yarn`, `bun`, and `npm` without requiring manual configuration.
 * **In-Memory Go Edge Proxy & Dynamic Cache Invalidation:** Sub-millisecond $O(1)$ in-memory routing table with pre-warmed connection pools and zero-disk per-request I/O. Supports instant hot-reloading via Redis Pub/Sub (`proxy:routes`) and internal REST control planes.
 * **Zero-Downtime Blue-Green Project Aliases & Instant Rollback:** Atomic production traffic routing (`http://<project-slug>.localhost:8000`) with persistent SQLite state, 1-click instantaneous promotion from preview deployments, and 1-click zero-downtime rollback to prior healthy versions.
@@ -49,7 +49,7 @@ Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS)
 | **1. Ingest** | `apps/web` → `services/api` | Dispatches deployment trigger | HTTP POST (`/api/deploy`) |
 | **2. Enqueue** | `services/api` → Redis | Pushes task to resilient Stream | Redis Stream `XADD stream:build` |
 | **3. Dequeue** | Redis → `services/builder` | Worker pulls task via consumer group with auto-claim recovery | Redis `XREADGROUP` / `XAUTOCLAIM` |
-| **4. Sandbox** | `services/builder` → Docker | Provisions hardened ephemeral container (CapDrop, PidsLimit) | Docker Engine API (`node:20-alpine`) |
+| **4. Sandbox** | `services/builder` → Docker | Provisions hardened ephemeral container (CapDrop, PidsLimit) | Docker Engine API (`node:22-alpine`) |
 | **5. Stream** | Docker → Redis Pub/Sub | Publishes real-time build logs | Redis `PUBLISH logs:<id>` |
 | **6. Relay** | Redis Pub/Sub → `apps/web` | Forwards log stream to UI | WebSockets (`ws://localhost:4000`) |
 | **7. Register** | `services/builder` → Edge Proxy | Registers dynamic route in-memory & broadcasts invalidation | Redis Pub/Sub `proxy:routes` & REST API |
@@ -69,7 +69,7 @@ flowchart LR
 
     subgraph Broker ["02. Message Bus & Isolation"]
         RedisStream[("Redis Stream<br/>stream:build")]
-        Docker["Docker Sandbox<br/>(Hardened node:20-alpine)"]
+        Docker["Docker Sandbox<br/>(Hardened node:22-alpine)"]
         RedisPubSub[("Redis Pub/Sub<br/>logs:id & proxy:routes")]
         RedisStream -->|"3. Consumer Group"| Docker
         Docker -.->|"4. Stream Logs"| RedisPubSub
@@ -114,7 +114,7 @@ stratus-cloud/
 
 ### Prerequisites
 * [Node.js](https://nodejs.org/) v22+
-* [Go](https://go.dev/) v1.26+
+* [Go](https://go.dev/) v1.27.4+
 * [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Engine running)
 * [Git](https://git-scm.com/)
 
