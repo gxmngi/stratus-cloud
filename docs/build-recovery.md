@@ -100,6 +100,11 @@ the original runtime and attempt count. A static fixture also verifies Git clone
 the Node 22 build image, and the served preview. The dynamic preview verifies
 that the runtime also uses Node 22.
 
+The smoke test promotes a second static release while the proxy is stopped.
+The restarted proxy serves that release on the original production URL and
+then returns to the first release after rollback. The API and proxy use
+separate workspaces for this check.
+
 The check removes its processes, labelled test containers and temporary workspace,
 and saves `services/data/build-recovery-report.json` (ignored by Git). It does not
 stop or change the user's local stack. CI runs this check in the builder job.
@@ -107,7 +112,21 @@ stop or change the user's local stack. CI runs this check in the builder job.
 ## Limits and next checks
 
 The completion journal recovers API state while Redis retains the result.
-Log messages and route updates still use Redis Pub/Sub. Redis data loss, proxy
-route reconciliation after restart and multi-host deployment remain outside this
-recovery path. Existing containers created before ownership labels were introduced
-require operator inspection if an old unacknowledged job refers to them.
+SQLite records the desired production route with a monotonically increasing
+revision. The API reconciles that state to Redis at startup and periodically.
+The proxy loads the saved routes independently of Pub/Sub. A successful promote
+or rollback response confirms the saved selection. Check the production URL
+to verify what the proxy serves.
+
+Restore SQLite and Redis from the same backup point. If only SQLite is
+restored, stop the API and proxy, clear the `stratus:production-routes` hash,
+then restart both so the API can rebuild the hash from SQLite.
+
+Scale-to-zero is disabled by default because preview and production can share a
+runtime. The experimental `ENABLE_SCALE_TO_ZERO=1` proxy setting enables it for
+explicit local use. `DISABLE_SCALE_TO_ZERO=1` takes precedence.
+
+Log messages still use Redis Pub/Sub. Redis loss also removes build result
+journals. Multi-host deployment remains outside this recovery path. Existing
+containers created before ownership labels were introduced require operator
+inspection if an old unacknowledged job refers to them.

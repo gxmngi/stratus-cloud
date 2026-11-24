@@ -94,6 +94,9 @@ export function initDatabase() {
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
 
     addProjectOwnership(db);
+    if (!(db.pragma('table_info(projects)') as { name: string }[]).some(column => column.name === 'production_route_revision')) {
+        db.exec('ALTER TABLE projects ADD COLUMN production_route_revision INTEGER NOT NULL DEFAULT 0');
+    }
     console.log(`[DB] SQLite initialized at: ${DB_FILE}`);
 }
 
@@ -133,6 +136,14 @@ export interface LogRecord {
     deployment_id: string;
     message: string;
     created_at: number;
+}
+
+export interface ProductionRoute {
+    subdomain: string;
+    aliasOf: string;
+    type: 'static' | 'dynamic';
+    port: number | null;
+    revision: number;
 }
 
 export type DeploymentBuildOutcome = (
@@ -198,13 +209,14 @@ export const dbService = {
         if (previousId) {
             db.prepare(`
                 UPDATE projects 
-                SET previous_production_deployment_id = ?, production_deployment_id = ?, updated_at = ?
+                SET previous_production_deployment_id = ?, production_deployment_id = ?, updated_at = ?,
+                    production_route_revision = production_route_revision + 1
                 WHERE id = ?
             `).run(previousId, deploymentId, now, projectId);
         } else {
             db.prepare(`
                 UPDATE projects 
-                SET production_deployment_id = ?, updated_at = ?
+                SET production_deployment_id = ?, updated_at = ?, production_route_revision = production_route_revision + 1
                 WHERE id = ?
             `).run(deploymentId, now, projectId);
         }
@@ -237,7 +249,8 @@ export const dbService = {
 
         db.prepare(`
             UPDATE projects 
-            SET production_deployment_id = ?, previous_production_deployment_id = ?, updated_at = ?
+            SET production_deployment_id = ?, previous_production_deployment_id = ?, updated_at = ?,
+                production_route_revision = production_route_revision + 1
             WHERE id = ?
         `).run(restoredDeployment.id, oldProductionId, now, projectId);
 
@@ -252,6 +265,15 @@ export const dbService = {
         return db.prepare(`
             SELECT * FROM projects ORDER BY updated_at DESC
         `).all() as ProjectRecord[];
+    },
+
+    getProductionRoutes(slug?: string): ProductionRoute[] {
+        return db.prepare(`
+            SELECT p.slug AS subdomain, d.id AS aliasOf, COALESCE(d.runtime_type, 'static') AS type,
+                d.container_port AS port, p.production_route_revision AS revision
+            FROM projects p JOIN deployments d ON d.id = p.production_deployment_id
+            WHERE p.slug IS NOT NULL AND d.status = 'READY' AND (? IS NULL OR p.slug = ?)
+        `).all(slug ?? null, slug ?? null) as ProductionRoute[];
     },
 
     createDeployment(record: Omit<DeploymentRecord, 'duration_ms' | 'completed_at'>): void {
@@ -305,7 +327,8 @@ export const dbService = {
             if (!ready || !deployment?.project_id) return;
 
             const promotion = db.prepare(`
-                UPDATE projects SET production_deployment_id = ?, updated_at = ?
+                UPDATE projects SET production_deployment_id = ?, updated_at = ?,
+                    production_route_revision = production_route_revision + 1
                 WHERE id = ? AND (production_deployment_id IS NULL OR production_deployment_id = '')
                 RETURNING slug
             `).get(id, now, deployment.project_id) as Pick<ProjectRecord, 'slug'> | undefined;

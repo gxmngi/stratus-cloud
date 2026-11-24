@@ -156,6 +156,8 @@ No real account/password is generated automatically and no existing project is
 assigned to the first person who registers. To restore a backup, stop the API,
 copy the backup to a new directory as `stratus.db`, and point `DATA_DIR` there.
 Keep the old directory intact until restoration is verified.
+Follow the [production route restore notes](build-recovery.md#limits-and-next-checks)
+before restarting the API and proxy with a restored database.
 
 `npm start` uses the regular database. The API Docker image includes operator
 scripts; run them with `docker compose -f docker-compose.prod.yml exec api npm run ...`.

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -137,7 +137,8 @@ const gate = setInterval(() => {
         BUILD_STREAM: 'stream:build', BUILD_GROUP: 'builder-group', BUILD_NAMESPACE: buildNamespace,
         BUILD_TIMEOUT_MS: '60000', BUILD_MAX_ATTEMPTS: '3',
         BUILD_LEASE_MS: '2000', BUILD_CLAIM_IDLE_MS: '4000', BUILD_RECOVERY_INTERVAL_MS: '250' };
-    const api = start('api', env);
+    const apiEnv = { ...env, WORKSPACE_DIR: path.join(testRoot, 'api-workspace') };
+    const api = start('api', apiEnv);
     await waitForApi();
     const credentials = { email: 'recovery@example.test', password: 'Recovery isolated test 2026' };
     assert.equal((await request('/api/auth/register', 'POST', credentials)).status, 201);
@@ -189,8 +190,9 @@ const gate = setInterval(() => {
     execFileSync('go', ['build', '-o', proxyBinary, '.'], {
         cwd: path.join(root, 'services/proxy'), windowsHide: true, timeout: 120000,
     });
-    start('proxy', { ...env, PORT: String(proxyPort), PROXY_HOST: '127.0.0.1', UPSTREAM_HOST: '127.0.0.1',
-        BASE_DOMAIN: '', TLS_DOMAINS: '', DISABLE_SCALE_TO_ZERO: '1' }, proxyBinary);
+    const proxyEnv = { ...env, PORT: String(proxyPort), PROXY_HOST: '127.0.0.1', UPSTREAM_HOST: '127.0.0.1',
+        BASE_DOMAIN: '', TLS_DOMAINS: '', DISABLE_SCALE_TO_ZERO: '1' };
+    const proxy = start('proxy', proxyEnv, proxyBinary);
 
     const another = await request('/api/deploy', 'POST', {
         gitUrl: apiRecoveryFixture, buildCommand: 'node wait-for-api-stop.js',
@@ -218,7 +220,7 @@ const gate = setInterval(() => {
     assert.equal(await redis.get(`${buildNamespace}:${apiRecoveryId}:attempts`), '1');
     console.log('[PASS] Worker finished and acknowledged a build while the API was stopped');
 
-    start('api', env);
+    start('api', apiEnv);
     await waitForApi();
     const recovered = await until(async () => {
         const { deployment } = await (await request(recoveryRoute)).json();
@@ -251,30 +253,62 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
 `);
     const gitOptions = { cwd: gitStaticFixture, windowsHide: true, timeout: 15000 };
     execFileSync('git', ['init', '--quiet', '--template='], gitOptions);
-    execFileSync('git', ['add', '--', 'build.js'], gitOptions);
-    execFileSync('git', ['-c', 'user.name=Stratus Smoke', '-c', 'user.email=smoke@example.test',
-        '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.git/hooks',
-        'commit', '--quiet', '-m', 'Create static smoke fixture'], gitOptions);
-    const staticBuild = await request('/api/deploy', 'POST', { gitUrl: gitStaticFixture, buildCommand: 'node build.js' });
-    assert.equal(staticBuild.status, 202);
-    const staticId = (await staticBuild.json()).deploymentId;
-    deploymentIds.push(staticId);
-    const staticDeployment = await until(async () => {
-        const { deployment } = await (await request(`/api/deployments/${staticId}`)).json();
-        assert.notEqual(deployment.status, 'FAILED', JSON.stringify(deployment));
-        return deployment.status === 'READY' ? deployment : null;
-    }, 'Git static fixture reaches READY');
+    async function commitAndDeployStatic(message) {
+        execFileSync('git', ['add', '--', 'build.js'], gitOptions);
+        execFileSync('git', ['-c', 'user.name=Stratus Smoke', '-c', 'user.email=smoke@example.test',
+            '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.git/hooks',
+            'commit', '--quiet', '-m', message], gitOptions);
+        const response = await request('/api/deploy', 'POST', { gitUrl: gitStaticFixture, buildCommand: 'node build.js' });
+        assert.equal(response.status, 202);
+        const id = (await response.json()).deploymentId;
+        deploymentIds.push(id);
+        return await until(async () => {
+            const { deployment } = await (await request(`/api/deployments/${id}`)).json();
+            assert.notEqual(deployment.status, 'FAILED', JSON.stringify(deployment));
+            return deployment.status === 'READY' ? deployment : null;
+        }, `Git static fixture reaches READY: ${message}`);
+    }
+    const staticDeployment = await commitAndDeployStatic('Release A');
+    const staticId = staticDeployment.id;
     assert.equal(staticDeployment.runtime_type, 'static');
     const staticPreview = await requestPreview(proxyPort, staticId);
     assert.equal(staticPreview.status, 200);
     assert.match(staticPreview.body, /^Stratus Git smoke on Node 22\.\d+\.\d+$/);
     console.log('[PASS] Cloned a Git fixture, built on Node 22, and served its static preview');
 
+    const staticProject = (await (await request('/api/projects')).json()).projects
+        .find(project => project.id === staticDeployment.project_id);
+    assert.ok(staticProject);
+    async function waitForProductionBody(expected) {
+        await until(async () => {
+            try {
+                const response = await requestPreview(proxyPort, staticProject.slug);
+                return response.status === 200 && response.body === expected;
+            } catch { return false; }
+        }, `production route serves ${expected}`, 15000);
+    }
+    await waitForProductionBody(staticPreview.body);
+    appendFileSync(path.join(gitStaticFixture, 'build.js'), "fs.appendFileSync('dist/index.html', ' release B');\n");
+    const next = await commitAndDeployStatic('Release B');
+    const nextPreview = await requestPreview(proxyPort, next.id);
+    assert.equal(nextPreview.status, 200);
+    assert.equal(nextPreview.body, `${staticPreview.body} release B`);
+    await stop(proxy);
+    assert.equal((await request(`/api/deployments/${next.id}/promote`, 'POST')).status, 200);
+    const savedRoute = JSON.parse(await redis.hget('stratus:production-routes', staticProject.slug));
+    assert.equal(savedRoute.aliasOf, next.id);
+    start('proxy', proxyEnv, proxyBinary);
+    await waitForProductionBody(nextPreview.body);
+    assert.equal((await request(`/api/projects/${staticProject.id}/rollback`, 'POST')).status, 200);
+    await waitForProductionBody(staticPreview.body);
+    console.log('[PASS] Production URL recovered release B after proxy restart and rolled back to release A');
+
     const report = { checkedAt: new Date().toISOString(), deploymentId, status: completed.status,
         attempts: 2, orphanRemoved: true, pending: 0, duplicatePreservedRuntime: true,
         runtimeId: runtime.Id, isolatedFromUserStack: true,
         apiRecovery: { deploymentId: apiRecoveryId, status: recovered.status, previewStatus: preview.status, attempts: 1 },
-        gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status } };
+        gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status },
+        productionRouteRecovery: { project: staticProject.slug, promoted: next.id, rolledBackTo: staticId } };
     writeFileSync(path.join(root, 'services/data/build-recovery-report.json'), JSON.stringify(report, null, 2) + '\n');
 } catch (error) {
     console.error(logs.slice(-30).join(''));

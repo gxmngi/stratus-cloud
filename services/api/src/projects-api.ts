@@ -136,7 +136,7 @@ export function createProjectRouter(options: {
         const productionUrl = `http://${project.slug}.localhost:8000`;
         res.json({
             success: true,
-            message: `Deployment ${deploymentId} promoted to production`,
+            message: `Production selection saved for deployment ${deploymentId}`,
             projectId: project.id,
             projectSlug: project.slug,
             productionUrl,
@@ -164,7 +164,7 @@ export function createProjectRouter(options: {
         }
 
         await syncProductionRoute(project.slug, result.restoredDeployment);
-        const rollbackMsg = `[ROLLBACK] Production traffic rolled back to deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
+        const rollbackMsg = `[ROLLBACK] Production selection saved for deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
         dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
         console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
 
@@ -201,7 +201,7 @@ export function createProjectRouter(options: {
         }
 
         await syncProductionRoute(project.slug, result.restoredDeployment);
-        const rollbackMsg = `[ROLLBACK] Production traffic rolled back to deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
+        const rollbackMsg = `[ROLLBACK] Production selection saved for deployment ${result.restoredDeployment.id} (displaced ${result.previousDeploymentId})`;
         dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
         console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
 
