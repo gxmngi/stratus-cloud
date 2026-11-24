@@ -100,6 +100,12 @@ the original runtime and attempt count. A static fixture also verifies Git clone
 the Node 22 build image, and the served preview. The dynamic preview verifies
 that the runtime also uses Node 22.
 
+The smoke test also makes the build stream reject a signed GitHub webhook and
+retries the same delivery concurrently after restoring the stream. It checks
+that only one deployment is created and queued. With the branch advanced before
+the builder starts, it verifies the checked-out SHA and the preview content
+from the original commit.
+
 The smoke test promotes a second static release while the proxy is stopped.
 The restarted proxy serves that release on the original production URL and
 then returns to the first release after rollback. The API and proxy use

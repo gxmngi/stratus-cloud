@@ -176,6 +176,12 @@ payload repository must match it and the HMAC signature must be valid. The old
 `/api/webhooks/github` endpoint only deploys when exactly one owned project matches
 the repository. It ignores ambiguous, unassigned or unknown projects.
 
+A deployable push must include the `X-GitHub-Delivery` ID and a full commit SHA
+in `after`. The builder checks out that exact SHA. Redelivery returns the same
+deployment ID for the project and queues the build at most once while its
+receipt is retained in Redis. If the API returns `503`, redeliver the failed
+delivery in GitHub after the queue is available.
+
 ## Verification
 
 ```powershell

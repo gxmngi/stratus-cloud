@@ -5,6 +5,51 @@ import { dbService, db, type ProjectRecord } from './db';
 
 // Branch ที่จะ Deploy อัตโนมัติเมื่อมีการ push
 const DEPLOY_REFS = ['refs/heads/main', 'refs/heads/master'];
+const GITHUB_DELIVERY_ID = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+const GITHUB_COMMIT_SHA = /^[0-9a-f]{40}$/i;
+
+const enqueueWebhook = `
+    local receipt = redis.call('GET', KEYS[2])
+    if receipt then return receipt end
+    receipt = redis.call('XADD', KEYS[1], '*', 'job', ARGV[1])
+    redis.call('SET', KEYS[2], receipt)
+    return receipt
+`;
+
+interface WebhookJob {
+    deploymentId: string;
+    gitUrl: string;
+    env: Record<string, never>;
+    trigger: 'webhook';
+    repository: string;
+    commitSha: string;
+    commitMessage: string;
+    pusher: string;
+}
+
+const reserveDelivery = db.transaction((project: ProjectRecord, deliveryId: string,
+    build: Omit<WebhookJob, 'deploymentId'>, newDeploymentId: () => string) => {
+    const existing = db.prepare('SELECT job_json FROM github_deliveries WHERE project_id = ? AND delivery_id = ?')
+        .get(project.id, deliveryId) as { job_json: string } | undefined;
+    if (existing) return JSON.parse(existing.job_json) as WebhookJob;
+
+    const job = { deploymentId: newDeploymentId(), ...build };
+    dbService.createDeployment({
+        id: job.deploymentId,
+        project_id: project.id,
+        git_url: job.gitUrl,
+        status: 'QUEUED',
+        live_url: `http://${job.deploymentId}.localhost:8000`,
+        trigger_type: 'webhook',
+        commit_sha: job.commitSha,
+        commit_message: job.commitMessage,
+        pusher: job.pusher,
+        created_at: Date.now(),
+    });
+    db.prepare('INSERT INTO github_deliveries (project_id, delivery_id, job_json) VALUES (?, ?, ?)')
+        .run(project.id, deliveryId, JSON.stringify(job));
+    return job;
+});
 
 /**
  * ตรวจสอบ X-Hub-Signature-256 ด้วย HMAC SHA-256 แบบ constant-time
@@ -78,14 +123,11 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
         const cloneUrl = payload.repository?.clone_url;
         const repoFullName = payload.repository?.full_name;
         const sha = payload.after;
-        if (!cloneUrl || !repoFullName || !sha) {
+        if (typeof cloneUrl !== 'string' || !cloneUrl || typeof repoFullName !== 'string' || !repoFullName ||
+            typeof sha !== 'string' || !sha) {
             res.status(400).json({ error: 'Payload missing repository.clone_url, repository.full_name or after' });
             return;
         }
-
-        const deploymentId = newDeploymentId();
-        const commitMessage = (payload.head_commit?.message ?? '').split('\n')[0];
-        const pusher = payload.pusher?.name ?? 'unknown';
 
         // The server-wide webhook secret is operator-controlled. It can deploy
         // existing owned projects, but cannot create or claim projects.
@@ -98,34 +140,35 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
             res.status(202).json({ status: 'ignored', reason: 'No unique configured project; use the project-specific webhook URL' });
             return;
         }
-        dbService.createDeployment({
-            id: deploymentId,
-            project_id: project.id,
-            git_url: cloneUrl,
-            status: 'QUEUED',
-            live_url: `http://${deploymentId}.localhost:8000`,
-            trigger_type: 'webhook',
-            commit_sha: sha,
-            commit_message: commitMessage,
-            pusher: pusher,
-            created_at: Date.now(),
-        });
-
-        const job = {
-            deploymentId,
+        const deliveryId = req.header('X-GitHub-Delivery');
+        if (!deliveryId || !GITHUB_DELIVERY_ID.test(deliveryId) || !GITHUB_COMMIT_SHA.test(sha)) {
+            res.status(400).json({ error: 'An applicable push requires a delivery ID and a full commit SHA' });
+            return;
+        }
+        const commitSha = sha.toLowerCase();
+        const job = reserveDelivery.immediate(project, deliveryId.toLowerCase(), {
             gitUrl: cloneUrl,
             env: {},
             trigger: 'webhook',
             repository: repoFullName,
-            commitSha: sha,
-            commitMessage,
-            pusher,
-        };
+            commitSha,
+            commitMessage: (payload.head_commit?.message ?? '').split('\n')[0],
+            pusher: payload.pusher?.name ?? 'unknown',
+        }, newDeploymentId);
+        if (job.commitSha !== commitSha || job.repository !== repoFullName) {
+            res.status(409).json({ error: 'Delivery ID is already associated with a different push' });
+            return;
+        }
 
-        const jobJson = JSON.stringify(job);
-        await publisher.xadd('stream:build', '*', 'job', jobJson);
-        console.log(`[GITHUB] Queued ${deploymentId} from ${repoFullName}@${sha.slice(0, 7)} by ${pusher}`);
-
-        res.status(202).json({ deploymentId, status: 'QUEUED' });
+        const namespace = process.env.BUILD_NAMESPACE || 'stratus:build';
+        try {
+            await publisher.eval(enqueueWebhook, 2, process.env.BUILD_STREAM || 'stream:build',
+                `${namespace}:${job.deploymentId}:enqueue-receipt`, JSON.stringify(job));
+        } catch {
+            console.error(`[GITHUB] Could not confirm enqueue for ${job.deploymentId}`);
+            res.status(503).json({ deploymentId: job.deploymentId, error: 'Build queue is unavailable. Redeliver this webhook.' });
+            return;
+        }
+        res.status(202).json({ deploymentId: job.deploymentId, status: 'QUEUED' });
     };
 }

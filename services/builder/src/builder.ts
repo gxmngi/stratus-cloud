@@ -31,6 +31,8 @@ redisPublisher.on('error', (err: Error) => {
 export interface BuildOptions {
     gitUrl: string;
     deploymentId: string;
+    trigger?: 'manual' | 'webhook';
+    commitSha?: string;
     buildCommand?: string;
     startCommand?: string;
     outputDir?: string;
@@ -167,7 +169,23 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         }
     }
 
-    if (isLocalDir) {
+    if (options.trigger === 'webhook' || options.commitSha !== undefined) {
+        try {
+            const sha = options.commitSha?.toLowerCase();
+            if (!sha || !/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid Git commit SHA');
+            const git = simpleGit({ baseDir: codeDir });
+            await git.init();
+            await git.fetch(targetRepoUrl, sha, ['--depth=1', '--no-tags', '--no-recurse-submodules']);
+            await git.checkout(['--detach', 'FETCH_HEAD']);
+            const head = (await git.revparse(['HEAD'])).trim();
+            if (head !== sha) throw new Error('Git checkout did not match the requested commit');
+            await emitLog(deploymentId, `[INFO] [${deploymentId}] Checked out Git commit ${head}`);
+        } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            await emitLog(deploymentId, `[ERROR] [${deploymentId}] Git checkout failed: ${message}`);
+            return { success: false, exitCode: 1, artifactPath: null, error: `Git checkout failed: ${message}` };
+        }
+    } else if (isLocalDir) {
         const hasGit = fs.existsSync(path.join(targetRepoUrl, '.git'));
         if (hasGit) {
             await emitLog(deploymentId, `[INFO] [${deploymentId}] Cloning local git repository: ${targetRepoUrl}`);

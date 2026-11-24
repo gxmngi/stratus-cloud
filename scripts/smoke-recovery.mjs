@@ -6,7 +6,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { createHmac, randomUUID } from 'node:crypto';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const require = createRequire(path.join(root, 'services/builder/package.json'));
@@ -20,6 +20,7 @@ const gitStaticFixture = path.join(testRoot, 'git-static-fixture');
 const workspace = path.join(testRoot, 'workspace');
 const redisName = `stratus-recovery-${runId}`;
 const buildNamespace = 'stratus:build:smoke-recovery';
+const webhookSecret = randomUUID();
 const children = [];
 const deploymentIds = [];
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
@@ -133,7 +134,7 @@ const gate = setInterval(() => {
     const env = { NODE_ENV: 'development', AUTH_DEV_OFFLINE: '0', PORT: String(apiPort), API_HOST: '127.0.0.1',
         DASHBOARD_ORIGIN: origin, DATA_DIR: path.join(testRoot, 'data'), WORKSPACE_DIR: workspace,
         HOST_WORKSPACE_PATH: workspace, REDIS_HOST: '127.0.0.1', REDIS_PORT: redisPort,
-        DOCKER_HOST: dockerHost, PROBE_HOST: '127.0.0.1', GITHUB_TOKEN: '', GITHUB_WEBHOOK_SECRET: '',
+        DOCKER_HOST: dockerHost, PROBE_HOST: '127.0.0.1', GITHUB_TOKEN: '', GITHUB_WEBHOOK_SECRET: webhookSecret,
         BUILD_STREAM: 'stream:build', BUILD_GROUP: 'builder-group', BUILD_NAMESPACE: buildNamespace,
         BUILD_TIMEOUT_MS: '60000', BUILD_MAX_ATTEMPTS: '3',
         BUILD_LEASE_MS: '2000', BUILD_CLAIM_IDLE_MS: '4000', BUILD_RECOVERY_INTERVAL_MS: '250' };
@@ -159,7 +160,7 @@ const gate = setInterval(() => {
     await stop(first);
     assert.ok((await inspect(`stratus-build-${deploymentId}`)).State.Running, 'Docker build survives worker death');
     console.log(`[PASS] Killed worker mid-build: ${deploymentId}; orphan sandbox ${oldBuild.Id.slice(0, 12)}`);
-    start('builder', env);
+    const worker = start('builder', env);
     const completed = await until(async () => {
         const { deployment } = await (await request(`/api/deployments/${deploymentId}`)).json();
         assert.notEqual(deployment.status, 'FAILED', JSON.stringify(deployment));
@@ -246,29 +247,39 @@ const gate = setInterval(() => {
     console.log('[PASS] Restarted API restored READY, preview, and first production route without rebuilding');
 
     mkdirSync(gitStaticFixture);
+    writeFileSync(path.join(gitStaticFixture, 'package.json'), JSON.stringify({
+        name: 'stratus-webhook-fixture', version: '1.0.0', scripts: { build: 'node build.js' },
+    }));
     writeFileSync(path.join(gitStaticFixture, 'build.js'), `const fs = require('node:fs');
 fs.mkdirSync('dist');
 fs.chmodSync('dist', 0o777);
 fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versions.node);
 `);
     const gitOptions = { cwd: gitStaticFixture, windowsHide: true, timeout: 15000 };
-    execFileSync('git', ['init', '--quiet', '--template='], gitOptions);
-    async function commitAndDeployStatic(message) {
-        execFileSync('git', ['add', '--', 'build.js'], gitOptions);
+    execFileSync('git', ['init', '--quiet', '--template=', '--initial-branch=main'], gitOptions);
+    function commitStatic(message) {
+        execFileSync('git', ['add', '--', 'build.js', 'package.json'], gitOptions);
         execFileSync('git', ['-c', 'user.name=Stratus Smoke', '-c', 'user.email=smoke@example.test',
             '-c', 'commit.gpgsign=false', '-c', 'core.hooksPath=.git/hooks',
             'commit', '--quiet', '-m', message], gitOptions);
+        return execFileSync('git', ['rev-parse', 'HEAD'], { ...gitOptions, encoding: 'utf8' }).trim();
+    }
+    async function deployStatic() {
         const response = await request('/api/deploy', 'POST', { gitUrl: gitStaticFixture, buildCommand: 'node build.js' });
         assert.equal(response.status, 202);
         const id = (await response.json()).deploymentId;
         deploymentIds.push(id);
+        return waitForStatic(id);
+    }
+    async function waitForStatic(id) {
         return await until(async () => {
             const { deployment } = await (await request(`/api/deployments/${id}`)).json();
             assert.notEqual(deployment.status, 'FAILED', JSON.stringify(deployment));
             return deployment.status === 'READY' ? deployment : null;
-        }, `Git static fixture reaches READY: ${message}`);
+        }, `Git static fixture ${id} reaches READY`);
     }
-    const staticDeployment = await commitAndDeployStatic('Release A');
+    const releaseA = commitStatic('Release A');
+    const staticDeployment = await deployStatic();
     const staticId = staticDeployment.id;
     assert.equal(staticDeployment.runtime_type, 'static');
     const staticPreview = await requestPreview(proxyPort, staticId);
@@ -288,8 +299,49 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
         }, `production route serves ${expected}`, 15000);
     }
     await waitForProductionBody(staticPreview.body);
+    await stop(worker);
+    const body = JSON.stringify({ ref: 'refs/heads/main', after: releaseA,
+        repository: { clone_url: gitStaticFixture, full_name: 'stratus-test/static-fixture' } });
+    const delivery = randomUUID();
+    const webhook = () => fetch(`http://127.0.0.1:${apiPort}/api/webhooks/github/${staticProject.id}`, {
+        method: 'POST', body, signal: AbortSignal.timeout(5000), headers: {
+            'Content-Type': 'application/json', 'X-GitHub-Event': 'push', 'X-GitHub-Delivery': delivery,
+            'X-Hub-Signature-256': 'sha256=' + createHmac('sha256', webhookSecret).update(body).digest('hex'),
+        },
+    });
+    const streamLength = await redis.xlen('stream:build');
+    await redis.rename('stream:build', 'stream:build:checkpoint');
+    try {
+        await redis.set('stream:build', 'test-queue-rejection');
+        assert.equal((await webhook()).status, 503);
+    } finally {
+        await redis.rename('stream:build:checkpoint', 'stream:build');
+    }
+    const deliveries = await Promise.all([webhook(), webhook()]);
+    const admissions = await Promise.all(deliveries.map(response => response.json()));
+    for (const { deploymentId: id } of admissions) if (id && !deploymentIds.includes(id)) deploymentIds.push(id);
+    for (const response of deliveries) assert.equal(response.status, 202);
+    const webhookId = admissions[0].deploymentId;
+    assert.ok(webhookId);
+    assert.equal(admissions[1].deploymentId, webhookId);
+    assert.equal(await redis.xlen('stream:build'), streamLength + 1);
+    const { deployments } = await (await request('/api/deployments')).json();
+    assert.deepEqual(deployments.filter(deployment => deployment.project_id === staticProject.id &&
+        deployment.trigger_type === 'webhook').map(deployment => deployment.id), [webhookId]);
     appendFileSync(path.join(gitStaticFixture, 'build.js'), "fs.appendFileSync('dist/index.html', ' release B');\n");
-    const next = await commitAndDeployStatic('Release B');
+    const releaseB = commitStatic('Release B');
+    assert.notEqual(releaseA, releaseB);
+    start('builder', env);
+    const pinned = await waitForStatic(webhookId);
+    assert.equal(pinned.commit_sha, releaseA);
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8',
+        cwd: path.join(workspace, webhookId, 'code'), windowsHide: true, timeout: 15000 }).trim(), releaseA);
+    const pinnedPreview = await requestPreview(proxyPort, webhookId);
+    assert.deepEqual(pinnedPreview, staticPreview);
+    assert.equal(await redis.get(`${buildNamespace}:${webhookId}:attempts`), '1');
+    console.log('[PASS] Failed enqueue retried safely; duplicate webhook built release A once after the source advanced to B');
+
+    const next = await deployStatic();
     const nextPreview = await requestPreview(proxyPort, next.id);
     assert.equal(nextPreview.status, 200);
     assert.equal(nextPreview.body, `${staticPreview.body} release B`);
@@ -308,7 +360,8 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
         runtimeId: runtime.Id, isolatedFromUserStack: true,
         apiRecovery: { deploymentId: apiRecoveryId, status: recovered.status, previewStatus: preview.status, attempts: 1 },
         gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status },
-        productionRouteRecovery: { project: staticProject.slug, promoted: next.id, rolledBackTo: staticId } };
+        productionRouteRecovery: { project: staticProject.slug, promoted: next.id, rolledBackTo: staticId },
+        githubWebhook: { deploymentId: webhookId, builtSha: releaseA, newerSha: releaseB, attempts: 1 } };
     writeFileSync(path.join(root, 'services/data/build-recovery-report.json'), JSON.stringify(report, null, 2) + '\n');
 } catch (error) {
     console.error(logs.slice(-30).join(''));
