@@ -246,6 +246,7 @@ const gate = setInterval(() => {
     mkdirSync(gitStaticFixture);
     writeFileSync(path.join(gitStaticFixture, 'build.js'), `const fs = require('node:fs');
 fs.mkdirSync('dist');
+fs.chmodSync('dist', 0o777);
 fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versions.node);
 `);
     const gitOptions = { cwd: gitStaticFixture, windowsHide: true, timeout: 15000 };
