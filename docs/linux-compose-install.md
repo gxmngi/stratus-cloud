@@ -10,8 +10,8 @@ builder's Docker socket private to the builder.
 
 Choose the full commit SHA from a successful
 [image publish run](https://github.com/gxmngi/stratus-cloud/actions/workflows/docker-publish.yml).
-Use the Compose file and all four Stratus images from that commit. Releases that
-predate `STRATUS_IMAGE_TAG` need a Compose file that supports the setting.
+Choose a release that supports `STRATUS_IMAGE_TAG`. Use the Compose file and all
+four Stratus images from the same commit.
 
 ```bash
 git clone https://github.com/gxmngi/stratus-cloud.git
@@ -35,14 +35,16 @@ secret out of source control.
 
 ## Verify deployment and rollback
 
-1. Open `http://localhost:3000/login`, create an account, and sign in. Deploy
-   the GitHub fixture. Wait for `READY`, then open its preview and the project's
-   production URL. Both should show the release marker from `release.txt`.
+1. Open `http://localhost:3000/register`, create an account, and sign in. Deploy
+   `https://github.com/gxmngi/stratus-deploy-fixture.git`, or use the HTTPS clone
+   URL of your own fixture. Wait for `READY`, then open the preview and the
+   project's production URL. Both should show the marker from `release.txt`.
    [Stratus deploy fixture](https://github.com/gxmngi/stratus-deploy-fixture)
 2. For a GitHub webhook check, configure a push webhook on a fixture you can
    push to. Use an HTTPS address that exposes the project-specific
    `/api/webhooks/github/PROJECT_ID` route. Set the content type to
-   `application/json` and use the value of `GITHUB_WEBHOOK_SECRET`.
+   `application/json` and use the value of `GITHUB_WEBHOOK_SECRET`. While signed
+   in, open `http://localhost:4000/api/projects` to find the project's `id`.
    See [webhook configuration](auth-readiness.md#websocket-and-webhooks).
 3. Change `release.txt` and push to `main`. Confirm GitHub reports a `202` response,
    the dashboard shows the pushed commit, and the preview serves the new marker.
