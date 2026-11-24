@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { githubWebhookHandler } from './github';
-import { initDatabase, dbService, DeploymentRecord } from './db';
+import { initDatabase, dbService, type ProductionRoute } from './db';
 import { createAuthRouter } from './auth';
 import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
@@ -21,34 +21,37 @@ const WORKSPACE_DIR = process.env.WORKSPACE_DIR
     ? path.resolve(process.env.WORKSPACE_DIR)
     : path.resolve(__dirname, '../../builder/workspace');
 
-// Sync production domain alias to Go Reverse Proxy (both via Redis and alias.json)
-async function syncProductionRoute(slug: string, deployment: DeploymentRecord) {
-    // 1. Write alias.json to workspace for cold-start proxy discovery
+const storeProductionRoute = `
+    local current = redis.call('HGET', KEYS[1], ARGV[1])
+    if current and cjson.decode(current).revision >= tonumber(ARGV[2]) then return 0 end
+    redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
+    redis.call('PUBLISH', 'proxy:production', ARGV[3])
+    redis.call('PUBLISH', 'proxy:routes', ARGV[3])
+    return 1
+`;
+
+async function publishProductionRoute(route: ProductionRoute) {
+    const changed = await redisPublisher.eval(storeProductionRoute, 1, 'stratus:production-routes',
+        route.subdomain, route.revision, JSON.stringify({ action: 'set', ...route }));
+    if (changed === 1) console.log(`[ROUTE] Saved revision ${route.revision} for ${route.subdomain}`);
+}
+
+async function syncProductionRoute(slug: string) {
+    const [route] = dbService.getProductionRoutes(slug);
+    if (!route) return;
     try {
         const aliasDir = path.join(WORKSPACE_DIR, slug);
         fs.mkdirSync(aliasDir, { recursive: true });
         fs.writeFileSync(path.join(aliasDir, 'alias.json'), JSON.stringify({
-            target: deployment.id,
-            type: deployment.runtime_type || 'static',
-            port: deployment.container_port || null,
-            updatedAt: Date.now()
-        }, null, 2));
-    } catch (fsErr) {
-        console.error(`[FS] Error writing alias.json for ${slug}:`, fsErr);
-    }
-
-    // 2. Publish to Redis proxy:routes channel for zero-downtime hot-swap
-    try {
-        await redisPublisher.publish('proxy:routes', JSON.stringify({
-            action: 'set',
-            subdomain: slug,
-            type: deployment.runtime_type || 'static',
-            port: deployment.container_port || null,
-            aliasOf: deployment.id,
+            target: route.aliasOf, type: route.type, port: route.port, revision: route.revision,
         }));
-        console.log(`[ROUTE] Promoted ${deployment.id} to production alias "${slug}"`);
-    } catch (redisErr) {
-        console.error(`[REDIS] Error publishing route promotion for ${slug}:`, redisErr);
+    } catch (error) {
+        console.error(`[FS] Could not save route fallback for ${slug}:`, error);
+    }
+    try {
+        await publishProductionRoute(route);
+    } catch (error) {
+        console.error(`[ROUTE] Could not publish ${slug}; reconciliation will retry:`, error);
     }
 }
 
@@ -78,9 +81,23 @@ function reconcilePendingBuilds() {
     if (redisPublisher.status !== 'ready') return;
     void buildResults.reconcilePending().catch(error => console.error('[RECOVERY] Could not reconcile builds:', error));
 }
+let reconcilingRoutes = false;
+async function reconcileProductionRoutes() {
+    if (reconcilingRoutes || redisPublisher.status !== 'ready') return;
+    reconcilingRoutes = true;
+    try {
+        for (const route of dbService.getProductionRoutes()) await publishProductionRoute(route);
+    } catch (error) {
+        console.error('[ROUTE] Reconciliation failed:', error);
+    } finally {
+        reconcilingRoutes = false;
+    }
+}
 if (!offline) {
     redisPublisher.on('ready', reconcilePendingBuilds);
+    redisPublisher.on('ready', reconcileProductionRoutes);
     setInterval(reconcilePendingBuilds, 5000).unref();
+    setInterval(reconcileProductionRoutes, 5000).unref();
 }
 
 // Redis Subscriber สำหรับบันทึก Logs ทุก Deployment ลง SQLite แบบรวมศูนย์

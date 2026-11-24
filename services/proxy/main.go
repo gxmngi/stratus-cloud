@@ -37,17 +37,18 @@ const (
 
 // RouteEntry ข้อมูลเส้นทางที่แคชไว้ใน RAM สำหรับ $O(1)$ routing
 type RouteEntry struct {
-	Subdomain     string                 `json:"subdomain"`
-	Type          RouteType              `json:"type"`
-	Port          int                    `json:"port,omitempty"`
-	DistDir       string                 `json:"distDir,omitempty"`
-	UpstreamURL   *url.URL               `json:"-"`
-	ReverseProxy  *httputil.ReverseProxy `json:"-"`
-	UpdatedAt     time.Time              `json:"updatedAt"`
-	ContainerName string                 `json:"containerName,omitempty"`
-	Status        string                 `json:"status,omitempty"` // "running" หรือ "sleeping"
-	LastActive    time.Time              `json:"-"`
-	stateMu       sync.Mutex             `json:"-"`
+	Subdomain          string                 `json:"subdomain"`
+	Type               RouteType              `json:"type"`
+	Port               int                    `json:"port,omitempty"`
+	DistDir            string                 `json:"distDir,omitempty"`
+	UpstreamURL        *url.URL               `json:"-"`
+	ReverseProxy       *httputil.ReverseProxy `json:"-"`
+	UpdatedAt          time.Time              `json:"updatedAt"`
+	ContainerName      string                 `json:"containerName,omitempty"`
+	Status             string                 `json:"status,omitempty"` // "running" หรือ "sleeping"
+	LastActive         time.Time              `json:"-"`
+	stateMu            sync.Mutex             `json:"-"`
+	productionRevision *uint64
 }
 
 // ProxyHandler โครงสร้างจัดการ Subdomain Routing พร้อม In-Memory Cache & Redis Sub
@@ -89,7 +90,7 @@ func NewProxyHandler() *ProxyHandler {
 			Addr: fmt.Sprintf("%s:%s", redisHost, redisPort),
 		})
 		go handler.startRedisRouteSubscriber()
-		if os.Getenv("DISABLE_SCALE_TO_ZERO") != "1" {
+		if scaleToZeroEnabled() {
 			go handler.startIdleContainerReaper()
 		}
 	}
@@ -104,7 +105,7 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 	}
 
 	ctx := context.Background()
-	pubsub := p.redisClient.Subscribe(ctx, "proxy:routes")
+	pubsub := p.redisClient.Subscribe(ctx, "proxy:routes", productionRouteChannel)
 	defer pubsub.Close()
 
 	log.Printf("[REDIS] Subscribed to dynamic route updates on channel: proxy:routes")
@@ -117,8 +118,37 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 		AliasOf   string `json:"aliasOf,omitempty"`
 	}
 
-	ch := pubsub.Channel()
-	for msg := range ch {
+	ch := pubsub.ChannelWithSubscriptions()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	p.reconcileProductionRoutes(ctx)
+
+	for {
+		var msg *redis.Message
+		select {
+		case <-ticker.C:
+			p.reconcileProductionRoutes(ctx)
+		case event, ok := <-ch:
+			if !ok {
+				return
+			}
+			switch value := event.(type) {
+			case *redis.Subscription:
+				if value.Kind == "subscribe" && value.Channel == productionRouteChannel {
+					p.reconcileProductionRoutes(ctx)
+				}
+			case *redis.Message:
+				msg = value
+			}
+		}
+		if msg == nil {
+			continue
+		}
+		if msg.Channel == productionRouteChannel {
+			p.applyProductionRoutePayload(msg.Payload, "")
+			continue
+		}
+
 		var rMsg RouteMessage
 		if err := json.Unmarshal([]byte(msg.Payload), &rMsg); err != nil {
 			log.Printf("[REDIS] Error unmarshaling route message: %v", err)
@@ -209,85 +239,54 @@ func (p *ProxyHandler) createDynamicRouteEntry(subdomain string, port int, alias
 }
 
 func (p *ProxyHandler) SetDynamicRoute(subdomain string, port int, aliasOf ...string) *RouteEntry {
-	entry := p.createDynamicRouteEntry(subdomain, port, aliasOf...)
-	if entry == nil {
-		return nil
-	}
-
-	p.routeMu.Lock()
-	p.routes[subdomain] = entry
-	p.routeMu.Unlock()
-
+	entry, _ := p.setUnversionedRoute(subdomain, p.createDynamicRouteEntry(subdomain, port, aliasOf...))
 	return entry
 }
 
-// SetStaticRoute ลงทะเบียน Static Build Directory เข้าสู่ In-Memory Table
 func (p *ProxyHandler) SetStaticRoute(subdomain string) *RouteEntry {
-	candidates := []string{"dist", "build", "out"}
-	var deploymentDistDir string
+	return p.SetStaticRouteFromTarget(subdomain, subdomain)
+}
 
-	for _, candidate := range candidates {
-		candidatePath := filepath.Join(p.workspaceBase, subdomain, "code", candidate)
-		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
-			deploymentDistDir = candidatePath
-			break
-		}
-	}
-
-	if deploymentDistDir == "" {
-		return nil
-	}
-
-	entry := &RouteEntry{
-		Subdomain: subdomain,
-		Type:      RouteTypeStatic,
-		DistDir:   deploymentDistDir,
-		UpdatedAt: time.Now(),
-	}
-
-	p.routeMu.Lock()
-	p.routes[subdomain] = entry
-	p.routeMu.Unlock()
-
+func (p *ProxyHandler) SetStaticRouteFromTarget(subdomain string, targetSubdomain string) *RouteEntry {
+	entry, _ := p.setUnversionedRoute(subdomain, p.createStaticRouteEntry(subdomain, targetSubdomain))
 	return entry
 }
 
-// SetStaticRouteFromTarget ลงทะเบียน Static Build Directory ของ Target Deployment ให้กับ Subdomain Alias
-func (p *ProxyHandler) SetStaticRouteFromTarget(subdomain string, targetSubdomain string) *RouteEntry {
-	candidates := []string{"dist", "build", "out"}
-	var deploymentDistDir string
-
-	for _, candidate := range candidates {
+func (p *ProxyHandler) createStaticRouteEntry(subdomain string, targetSubdomain string) *RouteEntry {
+	for _, candidate := range []string{"dist", "build", "out"} {
 		candidatePath := filepath.Join(p.workspaceBase, targetSubdomain, "code", candidate)
 		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
-			deploymentDistDir = candidatePath
-			break
+			return &RouteEntry{
+				Subdomain: subdomain,
+				Type:      RouteTypeStatic,
+				DistDir:   candidatePath,
+				UpdatedAt: time.Now(),
+			}
 		}
 	}
-
-	if deploymentDistDir == "" {
-		return nil
-	}
-
-	entry := &RouteEntry{
-		Subdomain: subdomain,
-		Type:      RouteTypeStatic,
-		DistDir:   deploymentDistDir,
-		UpdatedAt: time.Now(),
-	}
-
-	p.routeMu.Lock()
-	p.routes[subdomain] = entry
-	p.routeMu.Unlock()
-
-	return entry
+	return nil
 }
 
-// DeleteRoute ลบ Route ออกจาก Memory
-func (p *ProxyHandler) DeleteRoute(subdomain string) {
+func (p *ProxyHandler) setUnversionedRoute(subdomain string, entry *RouteEntry) (*RouteEntry, bool) {
 	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+	if current := p.routes[subdomain]; current != nil && current.productionRevision != nil {
+		return nil, false
+	}
+	if entry != nil {
+		p.routes[subdomain] = entry
+	}
+	return entry, true
+}
+
+func (p *ProxyHandler) DeleteRoute(subdomain string) bool {
+	p.routeMu.Lock()
+	defer p.routeMu.Unlock()
+	if current := p.routes[subdomain]; current != nil && current.productionRevision != nil {
+		return false
+	}
 	delete(p.routes, subdomain)
-	p.routeMu.Unlock()
+	return true
 }
 
 // GetRoute ค้นหา Route ใน Memory ($O(1)$) พร้อม Cold-Start Fallback อ่าน Disk กรณี Cache Miss
@@ -444,26 +443,29 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 			return
 		}
 
+		var entry *RouteEntry
 		if req.Type == string(RouteTypeDynamic) && req.Port > 0 {
-			entry := p.SetDynamicRoute(req.Subdomain, req.Port, req.AliasOf)
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(entry)
+			entry = p.createDynamicRouteEntry(req.Subdomain, req.Port, req.AliasOf)
 		} else if req.Type == string(RouteTypeStatic) {
-			var entry *RouteEntry
-			if req.AliasOf != "" {
-				entry = p.SetStaticRouteFromTarget(req.Subdomain, req.AliasOf)
-			} else {
-				entry = p.SetStaticRoute(req.Subdomain)
+			target := req.AliasOf
+			if target == "" {
+				target = req.Subdomain
 			}
-			if entry == nil {
-				http.Error(w, `{"error":"Static dist directory not found on disk"}`, http.StatusNotFound)
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			json.NewEncoder(w).Encode(entry)
+			entry = p.createStaticRouteEntry(req.Subdomain, target)
 		} else {
 			http.Error(w, `{"error":"Invalid type or missing port"}`, http.StatusBadRequest)
+			return
 		}
+		entry, accepted := p.setUnversionedRoute(req.Subdomain, entry)
+		if !accepted {
+			http.Error(w, `{"error":"Production route is managed by the API"}`, http.StatusConflict)
+			return
+		}
+		if entry == nil {
+			http.Error(w, `{"error":"Route target not found"}`, http.StatusNotFound)
+			return
+		}
+		json.NewEncoder(w).Encode(entry)
 
 	case http.MethodDelete:
 		subdomain := strings.TrimPrefix(r.URL.Path, "/_internal/routes/")
@@ -471,7 +473,10 @@ func (p *ProxyHandler) handleInternalRoutes(w http.ResponseWriter, r *http.Reque
 			http.Error(w, `{"error":"Missing subdomain in URL"}`, http.StatusBadRequest)
 			return
 		}
-		p.DeleteRoute(subdomain)
+		if !p.DeleteRoute(subdomain) {
+			http.Error(w, `{"error":"Production route is managed by the API"}`, http.StatusConflict)
+			return
+		}
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "subdomain": subdomain})
 
