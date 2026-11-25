@@ -8,10 +8,9 @@ import { findAvailablePort } from './port-allocator';
 import { waitForContainerReadiness } from './health';
 import { resolveDeploymentWorkspace } from './workspace';
 import { reservedRuntimePorts } from './runtime-ports';
+import { createRuntimeContainer, formatBuildEnvironment, NODE_IMAGE, resolveStartCommand, RUNTIME_PORT } from './runtime';
 
 const docker = new Docker();
-const NODE_IMAGE = 'node:22-alpine';
-const RUNTIME_PORT = 3000;
 
 // WORKSPACE_DIR: path ภายใน Process นี้ (ใน Container คือ /workspace)
 // HOST_WORKSPACE_PATH: path เดียวกันบน Host ที่ Docker Engine มองเห็น ใช้สำหรับ Bind Mount ของ Sandbox
@@ -81,36 +80,6 @@ function resolveBuildCommand(codeDir: string, customCommand?: string): string {
         return hasBuildScript ? 'npx --yes bun install && npx --yes bun run build' : 'npx --yes bun install';
     }
     return hasBuildScript ? 'npm install && npm run build' : 'npm install';
-}
-
-/**
- * ตรวจจับคำสั่ง Start Server สำหรับรัน Dynamic Application Container
- */
-function resolveStartCommand(codeDir: string, customStartCommand?: string): string | null {
-    if (customStartCommand) {
-        return customStartCommand;
-    }
-
-    const pkgPath = path.join(codeDir, 'package.json');
-    if (fs.existsSync(pkgPath)) {
-        try {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            if (pkg.scripts && pkg.scripts.start) {
-                return 'npm start';
-            }
-            if (pkg.main && fs.existsSync(path.join(codeDir, pkg.main))) {
-                return `node ${pkg.main}`;
-            }
-        } catch {}
-    }
-
-    for (const entry of ['server.js', 'app.js', 'index.js', 'main.js']) {
-        if (fs.existsSync(path.join(codeDir, entry))) {
-            return `node ${entry}`;
-        }
-    }
-
-    return null;
 }
 
 /**
@@ -246,31 +215,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = hostCodeDir.replace(/\\/g, '/');
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: ${NODE_IMAGE})`);
-    const SYSTEM_ENV_BLOCKLIST = new Set([
-        'AWS_ACCESS_KEY_ID',
-        'AWS_SECRET_ACCESS_KEY',
-        'DOCKER_HOST',
-        'DOCKER_CERT_PATH',
-        'DOCKER_TLS_VERIFY',
-        'DATABASE_URL',
-        'REDIS_PASSWORD',
-        'GITHUB_TOKEN',
-        'GITHUB_WEBHOOK_SECRET',
-        'STRATUS_WORKSPACE_HOST_PATH',
-    ]);
-
-    // Format custom environment variables for Docker container
-    const formattedEnv: string[] = [];
-    const secretValues: string[] = [];
-    if (options.env && typeof options.env === 'object') {
-        for (const [key, value] of Object.entries(options.env)) {
-            // Security: Sanitize key to allow only valid variable names and prevent host secret leakage
-            if (/^[A-Za-z0-9_]+$/.test(key) && typeof value === 'string' && !SYSTEM_ENV_BLOCKLIST.has(key)) {
-                formattedEnv.push(`${key}=${value}`);
-                if (value.length > 0) secretValues.push(value);
-            }
-        }
-    }
+    const { formattedEnv, secretValues } = formatBuildEnvironment(options.env);
     // ตั้งค่า Masker สำหรับ Deployment นี้: ค่า Secret จะถูกแทนที่ด้วย *** ก่อนส่งไปยัง Log/Redis
     setSecretMasker(deploymentId, secretValues);
     if (formattedEnv.length > 0) {
@@ -405,47 +350,14 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         const runtimeNetwork = process.env.STRATUS_RUNTIME_NETWORK?.trim();
         const containerName = `stratus-${deploymentId}`;
         const port = runtimeNetwork ? RUNTIME_PORT : await findAvailablePort(4100, 4999, await reservedRuntimePorts(docker));
-        const runtimePortKey = `${RUNTIME_PORT}/tcp`;
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Runtime endpoint: ${runtimeNetwork ? `${containerName}:${port}` : `host port ${port}`}`);
 
         let runContainer: Docker.Container | undefined;
         try {
             await assertLease();
-            if (runtimeNetwork) {
-                const network = await docker.getNetwork(runtimeNetwork).inspect();
-                if (network.Driver !== 'bridge' || !network.Internal) {
-                    throw new Error('STRATUS_RUNTIME_NETWORK must name an internal Docker bridge');
-                }
-            }
-            // Recovery has already removed only labelled containers owned by this deployment.
-            runContainer = await docker.createContainer({
-                name: containerName,
-                Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'runtime' },
-                Image: NODE_IMAGE,
-                Cmd: ['sh', '-c', startCmd],
-                WorkingDir: '/app',
-                Env: [
-                    ...formattedEnv,
-                    `PORT=${RUNTIME_PORT}`,
-                    'NODE_ENV=production',
-                    `STRATUS_DEPLOYMENT_ID=${deploymentId}`,
-                ],
-                ExposedPorts: {
-                    [runtimePortKey]: {},
-                },
-                HostConfig: {
-                    Binds: [`${hostMountPath}:/app`],
-                    ...(runtimeNetwork ? { NetworkMode: runtimeNetwork } : {
-                        PortBindings: { [runtimePortKey]: [{ HostPort: String(port), HostIp: '0.0.0.0' }] },
-                    }),
-                    Memory: 1024 * 1024 * 1024,
-                    MemorySwap: 1024 * 1024 * 1024,
-                    CpuQuota: 100000,
-                    PidsLimit: 512,
-                    SecurityOpt: ['no-new-privileges:true'],
-                    RestartPolicy: { Name: 'unless-stopped' },
-                },
-                Tty: true,
+            runContainer = await createRuntimeContainer(docker, {
+                deploymentId, image: NODE_IMAGE, startCommand: startCmd, formattedEnv,
+                hostCodeDir: hostMountPath, port, network: runtimeNetwork,
             });
 
             const runStream = await runContainer.attach({

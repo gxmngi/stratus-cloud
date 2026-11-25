@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "tsx --test src/*.test.ts"
+    "test": "tsx --test src/*.test.ts",
+    "restore:runtime": "tsx src/restore-runtime.ts"
   },
   "keywords": [],
   "author": "",
