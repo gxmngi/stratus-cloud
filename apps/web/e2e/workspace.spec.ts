@@ -174,3 +174,23 @@ test("accepted deletion stays visible until cleanup finishes", async ({ page }) 
   deployments = [];
   await expect(entry).toHaveCount(0);
 });
+
+test("runtime metrics distinguish unavailable data from a missing container", async ({ page }) => {
+  const deployment = {
+    id: "dep-metrics-state", git_url: "fixtures/metrics-preview", status: "READY",
+    runtime_type: "dynamic", live_url: "about:blank", created_at: Date.now(),
+  };
+  let status = "unavailable";
+  await page.route("**/api/deployments?limit=20", route => route.fulfill({ json: { deployments: [deployment] } }));
+  await page.route("**/api/deployments/dep-metrics-state/stats", route => route.fulfill({ json: {
+    metrics: { deploymentId: deployment.id, runtimeType: "dynamic", status, cpuPercent: 2,
+      memoryUsageBytes: 1048576, pidsCurrent: 3, pidsLimit: 512, uptimeSeconds: 60 },
+  } }));
+  await page.reload();
+  await expect(page.getByText("Runtime metrics unavailable. Retrying…", { exact: true })).toBeVisible();
+  status = "notFound";
+  await expect(page.getByText("Runtime container not found.", { exact: true })).toBeVisible({ timeout: 10000 });
+  status = "running";
+  await expect(page.getByText("2%", { exact: true })).toBeVisible({ timeout: 10000 });
+  await expect(page.getByText("Runtime container not found.", { exact: true })).toHaveCount(0);
+});

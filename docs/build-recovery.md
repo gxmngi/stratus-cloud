@@ -140,6 +140,19 @@ deployment queued for deletion cannot be promoted or selected for rollback. If
 cleanup remains pending, inspect builder logs for `[TEARDOWN]` and correct the
 underlying Docker or workspace error. The builder retries failed jobs.
 
+## Runtime metrics
+
+The authenticated deployment stats endpoint returns static status immediately.
+For a ready dynamic deployment, it returns a recent Redis sample or requests
+one from the builder. The builder samples only labelled runtime containers and
+keeps samples in Redis for six seconds. The dashboard refreshes the selected
+deployment while it is open.
+
+`notFound` means Docker returned 404 when the builder inspected the runtime.
+`exited` means Docker knows the container and reports it stopped. An expired
+sample, a failed Docker stats call, or a Redis outage produces `unavailable`.
+The API uses Redis for telemetry. The builder uses the Docker socket.
+
 ## Limits and next checks
 
 The completion journal recovers API state while Redis retains the result.

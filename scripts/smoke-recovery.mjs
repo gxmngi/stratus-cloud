@@ -171,6 +171,16 @@ const gate = setInterval(() => {
     assert.equal(await inspect(`stratus-build-${deploymentId}`), null, 'Finished sandbox must be removed');
     assert.equal(await redis.get(`${buildNamespace}:${deploymentId}:attempts`), '2');
     const runtime = await inspect(`stratus-${deploymentId}`);
+    const statsPath = `/api/deployments/${deploymentId}/stats`;
+    assert.equal((await (await request(statsPath)).json()).metrics.status, 'unavailable');
+    const metrics = await until(async () => {
+        const sample = (await (await request(statsPath)).json()).metrics;
+        return sample.status === 'running' && sample;
+    }, 'builder publishes dynamic runtime metrics');
+    assert.equal(metrics.containerId, runtime.Id.slice(0, 12));
+    assert.ok(metrics.memoryUsageBytes > 0);
+    assert.ok(metrics.pidsCurrent > 0);
+    console.log('[PASS] API received real runtime metrics sampled by the builder');
     assert.ok(runtime.State.Running);
     const health = await (await fetch(`http://127.0.0.1:${completed.container_port}`, { signal: AbortSignal.timeout(5000) })).json();
     assert.equal(health.deploymentId, deploymentId);
