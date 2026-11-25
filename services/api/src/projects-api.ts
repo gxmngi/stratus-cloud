@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import type Redis from 'ioredis';
 import { dbService, type DeploymentRecord } from './db';
 import { getDeploymentMetrics } from './telemetry';
-import { teardownDeployment } from './teardown';
+import { requestDeploymentDeletion } from './teardown';
 import { requireSession, requireTrustedOrigin } from './access';
 import { getOwnedProject, getOwnedDeployment, listOwnedProjects, listOwnedDeployments, getOrCreateOwnedProject } from './ownership';
 import { createDeploymentUrl } from './deployment-url';
@@ -45,18 +45,15 @@ function normalizeEnv(input: unknown): EnvResult {
 
 export function createProjectRouter(options: {
     publisher: Redis;
-    workspaceDir: string;
     dashboardOrigin: string;
     port: number | string;
     baseDomain?: string;
     newDeploymentId: () => string;
-    teardown?: typeof teardownDeployment;
     buildsEnabled?: boolean;
     syncProductionRoute: (slug: string, deployment: DeploymentRecord) => Promise<void>;
 }) {
     const router = Router();
-    const teardown = options.teardown || teardownDeployment;
-    const { publisher: redisPublisher, workspaceDir: WORKSPACE_DIR, dashboardOrigin, port: PORT,
+    const { publisher: redisPublisher, dashboardOrigin, port: PORT,
         newDeploymentId, syncProductionRoute } = options;
     const deploymentUrl = createDeploymentUrl(options.baseDomain);
     const logOrigin = options.baseDomain?.trim() ? dashboardOrigin.replace(/^http/, 'ws') : `ws://localhost:${PORT}`;
@@ -107,6 +104,17 @@ export function createProjectRouter(options: {
         res.json({ projects });
     });
 
+    router.delete('/deployments/:id', (req: Request, res: Response) => {
+        const deploymentId = req.params.id as string;
+        switch (requestDeploymentDeletion(deploymentId, res.locals.user.id)) {
+        case 'QUEUED': res.status(202).json({ deploymentId, status: 'DELETING' }); return;
+        case 'DELETED': res.json({ success: true, deploymentId, status: 'DELETED' }); return;
+        case 'MISSING': res.status(404).json({ error: 'Deployment not found' }); return;
+        case 'PRODUCTION': res.status(409).json({ error: 'Promote another deployment or roll back before deleting the active production deployment.' }); return;
+        case 'BUILDING': res.status(409).json({ error: 'Wait for the build to finish before deleting this deployment.' }); return;
+        }
+    });
+
     router.use('/deployments/:id', (req: Request, res: Response, next: NextFunction) => {
         if (!getOwnedDeployment(res.locals.user.id, req.params.id as string)) {
             res.status(404).json({ error: 'Deployment not found' });
@@ -137,7 +145,10 @@ export function createProjectRouter(options: {
             return;
         }
 
-        dbService.setProjectProductionDeployment(project.id, deploymentId);
+        if (!dbService.setProjectProductionDeployment(project.id, deploymentId)) {
+            res.status(409).json({ error: 'Deployment is no longer ready to promote' });
+            return;
+        }
         await syncProductionRoute(project.slug, deployment);
 
         const productionUrl = deploymentUrl(project.slug);
@@ -259,22 +270,6 @@ export function createProjectRouter(options: {
             (deployment.runtime_type || 'static') as 'static' | 'dynamic'
         );
         res.json({ metrics });
-    });
-
-    // Teardown deployment: stops container, invalidates route, cleans workspace, and deletes DB records
-    router.delete('/deployments/:id', async (req: Request, res: Response) => {
-        const deploymentId = req.params.id as string;
-        const result = await teardown(deploymentId, WORKSPACE_DIR, redisPublisher);
-        if (!result.success) {
-            res.status(400).json({ error: result.error || 'Teardown failed' });
-            return;
-        }
-
-        res.json({
-            success: true,
-            message: `Deployment ${deploymentId} torn down successfully`,
-            details: result,
-        });
     });
 
     // Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว พร้อมบันทึกลง SQLite

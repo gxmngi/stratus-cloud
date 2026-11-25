@@ -103,8 +103,14 @@ async function main() {
         assert.equal((await request(`/api/projects/${project.id}/rollback`, alice, 'POST', {})).status, 200);
         assert.equal(await preview(project.slug), `${marker}-one`);
         passed('Promote and rollback change the actual served release');
-        assert.equal((await request(`/api/deployments/${second.id}`, alice, 'DELETE')).status, 200);
-        assert.equal((await request(`/api/deployments/${second.id}`, alice)).status, 404);
+        const deletionRoute = `/api/deployments/${second.id}`;
+        assert.equal((await request(deletionRoute, alice, 'DELETE')).status, 202);
+        let deleted = false;
+        for (let attempt = 0; attempt < 30 && !deleted; attempt++) {
+            deleted = (await request(deletionRoute, alice)).status === 404;
+            if (!deleted) await delay(1000);
+        }
+        assert.ok(deleted, 'preview cleanup completed');
         assert.equal(await preview(project.slug), `${marker}-one`);
         passed('Preview teardown preserves the active production deployment');
         Object.assign(report, { deploymentId: first.id, previewUrl: first.live_url,

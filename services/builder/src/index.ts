@@ -5,6 +5,7 @@ import { postCommitStatus, WebhookMeta } from './github';
 import { BuildWorker } from './worker';
 import { cleanupInterruptedBuild } from './recovery';
 import { publishBuildResult } from './result';
+import { createDeploymentDeletionWorker } from './deployment-deletions';
 
 const redisConsumer = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -53,6 +54,13 @@ startLifecycleSubscriber();
 
 const control = redisConsumer.duplicate({ enableOfflineQueue: false, maxRetriesPerRequest: 1, commandTimeout: 5000 });
 control.on('error', error => console.error('[REDIS] Worker control error:', error.message));
+const deleteDeployments = createDeploymentDeletionWorker(control);
+function processDeletions() {
+    if (control.status !== 'ready') return;
+    void deleteDeployments().catch(error => console.error('[TEARDOWN] Worker could not process deletions:', error));
+}
+control.on('ready', processDeletions);
+setInterval(processDeletions, 1000).unref();
 function positiveSetting(name: string, fallback: number): number {
     const value = Number(process.env[name] || fallback);
     if (!Number.isInteger(value) || value <= 0) throw new Error(`Invalid ${name}`);

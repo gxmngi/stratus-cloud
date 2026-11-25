@@ -65,7 +65,7 @@ interface DeploymentItem {
   can_rollback?: boolean;
   previous_production_deployment_id?: string | null;
   git_url: string;
-  status: "QUEUED" | "BUILDING" | "READY" | "FAILED";
+  status: "QUEUED" | "BUILDING" | "READY" | "FAILED" | "DELETING";
   live_url: string;
   runtime_type?: "static" | "dynamic";
   container_port?: number | null;
@@ -163,9 +163,11 @@ function Dashboard() {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to delete deployment");
       }
-      setActiveDeploymentId((current) =>
-        current === deploymentId ? null : current,
-      );
+      if (res.status !== 202) {
+        setActiveDeploymentId((current) =>
+          current === deploymentId ? null : current,
+        );
+      }
       await fetchDeployments();
     } catch (err) {
       setNotice(
@@ -241,13 +243,9 @@ function Dashboard() {
   const activeDeployment =
     deployments.find((d) => d.id === activeDeploymentId) || null;
 
-  // Poll status while active deployment is pending
+  const hasPendingDeletion = deployments.some((deployment) => deployment.status === "DELETING");
   useEffect(() => {
-    if (
-      !activeDeployment ||
-      activeDeployment.status === "READY" ||
-      activeDeployment.status === "FAILED"
-    ) {
+    if (!hasPendingDeletion && activeDeployment?.status !== "QUEUED" && activeDeployment?.status !== "BUILDING") {
       return;
     }
 
@@ -256,7 +254,7 @@ function Dashboard() {
     }, 2000);
 
     return () => clearInterval(interval);
-  }, [activeDeployment, fetchDeployments]);
+  }, [activeDeployment?.status, hasPendingDeletion, fetchDeployments]);
 
   const handleAddEnv = () => {
     setEnvVars((prev) => [...prev, { key: "", value: "" }]);
@@ -925,7 +923,8 @@ function Dashboard() {
                             <RotateCcw size={14} /> Rollback
                           </button>
                         )}
-                      {!activeDeployment.is_production && (
+                      {!activeDeployment.is_production &&
+                        (activeDeployment.status === "READY" || activeDeployment.status === "FAILED") && (
                         <button
                           className="icon-button delete-button"
                           aria-label="Delete deployment"

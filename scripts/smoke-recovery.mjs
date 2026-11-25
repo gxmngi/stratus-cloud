@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn, execFileSync } from 'node:child_process';
-import { appendFileSync, cpSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { appendFileSync, cpSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import { createRequire } from 'node:module';
 import net from 'node:net';
@@ -332,7 +332,7 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
     appendFileSync(path.join(gitStaticFixture, 'build.js'), "fs.appendFileSync('dist/index.html', ' release B');\n");
     const releaseB = commitStatic('Release B');
     assert.notEqual(releaseA, releaseB);
-    const staticWorker = start('builder', env);
+    let staticWorker = start('builder', env);
     const pinned = await waitForStatic(webhookId);
     assert.equal(pinned.commit_sha, releaseA);
     assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8',
@@ -355,6 +355,49 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
     assert.equal((await request(`/api/projects/${staticProject.id}/rollback`, 'POST')).status, 200);
     await waitForProductionBody(staticPreview.body);
     console.log('[PASS] Production URL recovered release B after proxy restart and rolled back to release A');
+
+    const deletionCandidate = await request('/api/deploy', 'POST', { gitUrl: fixture, buildCommand: 'true' });
+    assert.equal(deletionCandidate.status, 202);
+    const deletionId = (await deletionCandidate.json()).deploymentId;
+    deploymentIds.push(deletionId);
+    const deletionRoute = `/api/deployments/${deletionId}`;
+    await until(async () => {
+        const { deployment } = await (await request(deletionRoute)).json();
+        assert.notEqual(deployment.status, 'FAILED');
+        return deployment.status === 'READY';
+    }, 'dynamic preview to delete');
+    assert.equal((await requestPreview(proxyPort, deletionId)).status, 200);
+    assert.equal((await request(`/api/deployments/${deploymentId}`, 'DELETE')).status, 409);
+    await stop(staticWorker);
+    assert.equal((await request(deletionRoute, 'DELETE')).status, 202);
+    assert.equal((await request(deletionRoute, 'DELETE')).status, 202);
+    const deletionQueue = 'stratus:deployment-deletions';
+    const deletedPreviews = 'stratus:deleted-previews';
+    await until(async () => await redis.zscore(deletionQueue, deletionId) !== null, 'durable deletion dispatch');
+    // Refuse confirmation after real cleanup to exercise a restart at the retry boundary.
+    await redis.set(deletedPreviews, 'test-deletion-confirmation-blocker');
+    staticWorker = start('builder', env);
+    await until(async () => !(await inspect(`stratus-${deletionId}`)) && !existsSync(path.join(workspace, deletionId)),
+        'runtime and workspace removed before confirmation');
+    await stop(staticWorker);
+    assert.equal((await (await request(deletionRoute)).json()).deployment.status, 'DELETING');
+    await redis.del(deletedPreviews);
+    staticWorker = start('builder', env);
+    await until(async () => (await request(deletionRoute)).status === 404, 'deletion finalized after restart');
+    assert.equal((await request(deletionRoute, 'DELETE')).status, 200);
+    await redis.publish('proxy:routes', JSON.stringify({ action: 'set', subdomain: deletionId,
+        type: 'dynamic', port: completed.container_port }));
+    const replayMarker = 'deletion-replay-check';
+    await redis.publish('proxy:routes', JSON.stringify({ action: 'set', subdomain: replayMarker,
+        type: 'dynamic', port: completed.container_port }));
+    await until(async () => (await requestPreview(proxyPort, replayMarker)).status === 200, 'proxy processed the replay');
+    assert.equal((await requestPreview(proxyPort, deletionId)).status, 404);
+    const protectedProject = projects.find(project => project.id === completed.project_id);
+    assert.ok(protectedProject);
+    const protectedPreview = await requestPreview(proxyPort, protectedProject.slug);
+    assert.equal(protectedPreview.status, 200);
+    assert.equal(JSON.parse(protectedPreview.body).deploymentId, deploymentId);
+    console.log('[PASS] Dynamic preview deletion resumed after worker restart, stayed idempotent, and protected production');
 
     assert.equal((await request(`/api/deployments/${next.id}/promote`, 'POST')).status, 200);
     await waitForProductionBody(nextPreview.body);
@@ -412,7 +455,8 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
         gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status },
         productionRouteRecovery: { project: staticProject.slug, promoted: next.id, rolledBackTo: staticId },
         githubWebhook: { deploymentId: webhookId, builtSha: releaseA, newerSha: releaseB, attempts: 1 },
-        staticRestore: { project: staticProject.slug, restored: next.id, rolledBackTo: staticId } };
+        staticRestore: { project: staticProject.slug, restored: next.id, rolledBackTo: staticId },
+        deploymentDeletion: { deleted: deletionId, protected: deploymentId } };
     writeFileSync(path.join(root, 'services/data/build-recovery-report.json'), JSON.stringify(report, null, 2) + '\n');
 } catch (error) {
     console.error(logs.slice(-30).join(''));

@@ -12,6 +12,7 @@ import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
 import { createBuildResultRecovery } from './build-result-recovery';
 import { createDeploymentUrl } from './deployment-url';
+import { createDeletionReconciler } from './teardown';
 
 const app = express();
 if (process.env.TRUST_PROXY_HOPS === '1') app.set('trust proxy', 1);
@@ -59,7 +60,10 @@ async function syncProductionRoute(slug: string) {
 
 // รหัส Deployment แบบสุ่ม (กันชนกันของ Date.now().slice ที่ใช้เดิม)
 function newDeploymentId(): string {
-    return `dep-${crypto.randomBytes(4).toString('hex')}`;
+    let id: string;
+    do { id = `dep-${crypto.randomBytes(4).toString('hex')}`; }
+    while (dbService.isDeploymentIdUsed(id));
+    return id;
 }
 const PORT = process.env.PORT || 4000;
 const offline = process.env.AUTH_DEV_OFFLINE === '1' && process.env.NODE_ENV !== 'production';
@@ -79,6 +83,11 @@ redisPublisher.on('error', (err) => {
 
 const buildResults = createBuildResultRecovery(redisPublisher,
     process.env.BUILD_NAMESPACE || 'stratus:build', syncProductionRoute);
+const reconcileDeletions = createDeletionReconciler(redisPublisher);
+function syncDeletions() {
+    if (redisPublisher.status !== 'ready') return;
+    void reconcileDeletions().catch(error => console.error('[TEARDOWN] Could not reconcile deletions:', error));
+}
 function reconcilePendingBuilds() {
     if (redisPublisher.status !== 'ready') return;
     void buildResults.reconcilePending().catch(error => console.error('[RECOVERY] Could not reconcile builds:', error));
@@ -98,8 +107,10 @@ async function reconcileProductionRoutes() {
 if (!offline) {
     redisPublisher.on('ready', reconcilePendingBuilds);
     redisPublisher.on('ready', reconcileProductionRoutes);
+    redisPublisher.on('ready', syncDeletions);
     setInterval(reconcilePendingBuilds, 5000).unref();
     setInterval(reconcileProductionRoutes, 5000).unref();
+    setInterval(syncDeletions, 1000).unref();
 }
 
 // Redis Subscriber สำหรับบันทึก Logs ทุก Deployment ลง SQLite แบบรวมศูนย์
@@ -168,7 +179,6 @@ attachLogStream(server, dashboardOrigin, () => new Redis({
 }), !offline);
 app.use('/api', createProjectRouter({
     publisher: redisPublisher,
-    workspaceDir: WORKSPACE_DIR,
     dashboardOrigin,
     port: PORT,
     baseDomain,

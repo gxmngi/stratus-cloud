@@ -1,115 +1,50 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import fs from 'fs';
-import path from 'path';
-import { teardownDeployment } from './teardown';
+import { createDeletionReconciler, requestDeploymentDeletion } from './teardown';
 import { initDatabase, dbService, db } from './db';
 
-test.describe('Deployment Teardown & Lifecycle GC', () => {
-    const testWorkspace = process.env.TEST_WORKSPACE_DIR;
-    if (!testWorkspace) {
-        throw new Error('Run with npm test to configure an isolated test workspace');
+test('deletion remains retryable until cleanup and protects production and ownership', async () => {
+    initDatabase();
+    db.prepare('INSERT INTO users VALUES (?, ?, ?, ?)').run('owner', 'owner@example.test', 'unused', 1);
+    const project = dbService.getOrCreateProject('fixtures/demo');
+    db.prepare('UPDATE projects SET owner_id = ? WHERE id = ?').run('owner', project.id);
+    for (const [id, status] of [['dep-prod', 'READY'], ['dep-preview', 'READY'], ['dep-building', 'BUILDING']] as const) {
+        dbService.createDeployment({ id, project_id: project.id, status, git_url: project.git_url, live_url: 'about:blank', created_at: 1 });
     }
+    dbService.setProjectProductionDeployment(project.id, 'dep-preview');
+    dbService.setProjectProductionDeployment(project.id, 'dep-prod');
+    dbService.appendLog('dep-preview', 'durable until cleaned');
 
-    test.before(() => {
-        initDatabase();
-        if (!fs.existsSync(testWorkspace)) {
-            fs.mkdirSync(testWorkspace, { recursive: true });
-        }
+    assert.equal(requestDeploymentDeletion('../outside', 'owner'), 'MISSING');
+    assert.equal(requestDeploymentDeletion('dep-prod', 'owner'), 'PRODUCTION');
+    assert.equal(requestDeploymentDeletion('dep-builder', 'owner'), 'MISSING');
+    assert.equal(requestDeploymentDeletion('dep-building', 'owner'), 'BUILDING');
+    assert.equal(requestDeploymentDeletion('dep-preview', 'other'), 'MISSING');
+    assert.equal(requestDeploymentDeletion('dep-preview', 'owner'), 'QUEUED');
+    assert.equal(requestDeploymentDeletion('dep-preview', 'owner'), 'QUEUED');
+    assert.equal(dbService.getDeployment('dep-preview')?.status, 'DELETING');
+    assert.equal(dbService.getDeploymentLogs('dep-preview').length, 1);
+    assert.equal(dbService.setProjectProductionDeployment(project.id, 'dep-preview'), false);
+    assert.equal(dbService.rollbackProjectProductionDeployment(project.id).success, false);
+
+    let completed = false;
+    const dispatches: string[] = [];
+    const reconcile = createDeletionReconciler({
+        eval: async (_script, _keys, _queue, _deleted, id) => {
+            dispatches.push(String(id));
+            return completed ? 1 : 0;
+        },
     });
-
-    test.beforeEach(() => {
-        db.exec('DELETE FROM deployment_logs;');
-        db.exec('DELETE FROM deployments;');
-        db.exec('DELETE FROM projects;');
-    });
-
-    test.after(() => {
-        if (fs.existsSync(testWorkspace)) {
-            fs.rmSync(testWorkspace, { recursive: true, force: true });
-        }
-    });
-
-    test('rejects a workspace traversal before changing deployment records', async () => {
-        dbService.createDeployment({ id: '../outside', project_id: null, git_url: 'fixtures/demo-app',
-            status: 'READY', live_url: 'about:blank', created_at: 1 });
-        const result = await teardownDeployment('../outside', testWorkspace);
-        assert.equal(result.success, false);
-        assert.match(result.error || '', /Invalid deployment workspace/);
-        assert.ok(dbService.getDeployment('../outside'));
-    });
-
-    test('refuses to teardown active production deployment', async () => {
-        const project = dbService.getOrCreateProject('https://github.com/stratus/prod-app.git');
-        dbService.createDeployment({
-            id: 'dep-prod',
-            project_id: project.id,
-            git_url: project.git_url,
-            status: 'READY',
-            live_url: 'http://dep-prod.localhost:8000',
-            created_at: Date.now(),
-        });
-
-        // Promote to production
-        dbService.setProjectProductionDeployment(project.id, 'dep-prod');
-
-        const result = await teardownDeployment('dep-prod', testWorkspace);
-        assert.equal(result.success, false);
-        assert.match(result.error || '', /Cannot delete deployment .* active production deployment/i);
-
-        // Verify deployment still exists in DB
-        const stillExists = dbService.getDeployment('dep-prod');
-        assert.ok(stillExists);
-    });
-
-    test('successfully tears down preview deployment and cleans artifacts', async () => {
-        const project = dbService.getOrCreateProject('https://github.com/stratus/preview-app.git');
-        dbService.createDeployment({
-            id: 'dep-preview',
-            project_id: project.id,
-            git_url: project.git_url,
-            status: 'READY',
-            live_url: 'http://dep-preview.localhost:8000',
-            created_at: Date.now(),
-        });
-
-        // Create fake workspace folder
-        const depFolder = path.join(testWorkspace, 'dep-preview');
-        fs.mkdirSync(depFolder, { recursive: true });
-        fs.writeFileSync(path.join(depFolder, 'index.html'), '<h1>hello</h1>');
-
-        let publishedMessage: string | null = null;
-        const mockRedis = {
-            publish: async (channel: string, msg: string) => {
-                if (channel === 'proxy:routes') {
-                    publishedMessage = msg;
-                }
-                return 1;
-            },
-        } as any;
-
-        const result = await teardownDeployment('dep-preview', testWorkspace, mockRedis);
-        assert.equal(result.success, true);
-        assert.equal(result.diskCleaned, true);
-        assert.equal(result.routeRemoved, true);
-
-        // Verify folder deleted
-        assert.equal(fs.existsSync(depFolder), false);
-
-        // Verify DB record deleted
-        const depInDb = dbService.getDeployment('dep-preview');
-        assert.equal(depInDb, undefined);
-
-        // Verify Redis deletion message
-        assert.ok(publishedMessage);
-        const parsed = JSON.parse(publishedMessage);
-        assert.equal(parsed.action, 'delete');
-        assert.equal(parsed.subdomain, 'dep-preview');
-    });
-
-    test('returns error when deleting nonexistent deployment', async () => {
-        const result = await teardownDeployment('nonexistent-dep-999', testWorkspace);
-        assert.equal(result.success, false);
-        assert.match(result.error || '', /Deployment not found/i);
-    });
+    await reconcile();
+    assert.ok(dbService.getDeployment('dep-preview'));
+    completed = true;
+    await reconcile();
+    await reconcile();
+    assert.deepEqual(dispatches, ['dep-preview', 'dep-preview']);
+    assert.equal(requestDeploymentDeletion('dep-preview', 'other'), 'MISSING');
+    assert.equal(requestDeploymentDeletion('dep-preview', 'owner'), 'DELETED');
+    assert.equal(dbService.getDeployment('dep-preview'), undefined);
+    assert.deepEqual(dbService.getDeploymentLogs('dep-preview'), []);
+    assert.equal(dbService.getProject(project.id)?.previous_production_deployment_id, null);
+    assert.equal(dbService.getProject(project.id)?.production_deployment_id, 'dep-prod');
 });
