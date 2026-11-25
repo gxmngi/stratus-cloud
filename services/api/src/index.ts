@@ -11,8 +11,10 @@ import { createAuthRouter } from './auth';
 import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
 import { createBuildResultRecovery } from './build-result-recovery';
+import { createDeploymentUrl } from './deployment-url';
 
 const app = express();
+if (process.env.TRUST_PROXY_HOPS === '1') app.set('trust proxy', 1);
 
 // Initialize SQLite database
 initDatabase();
@@ -135,6 +137,14 @@ redisLogCollector.on('pmessage', (pattern, channel, message) => {
 
 // อนุญาตให้ Dashboard (Next.js) เรียก API ได้ข้ามโดเมน
 const dashboardOrigin = process.env.DASHBOARD_ORIGIN || 'http://localhost:3000';
+const baseDomain = process.env.BASE_DOMAIN?.trim().toLowerCase();
+const deploymentUrl = createDeploymentUrl(baseDomain);
+if (baseDomain) {
+    const dashboard = new URL(dashboardOrigin);
+    if (dashboard.protocol !== 'https:' || dashboard.hostname === baseDomain || dashboard.hostname.endsWith(`.${baseDomain}`)) {
+        throw new Error('Configure an HTTPS DASHBOARD_ORIGIN outside BASE_DOMAIN');
+    }
+}
 app.use(cors({ origin: dashboardOrigin, credentials: true, exposedHeaders: ['Retry-After'] }));
 
 // GitHub Webhook ต้องการ Raw Body สำหรับตรวจ HMAC จึงลงทะเบียนก่อน express.json()
@@ -145,7 +155,7 @@ app.post(
         next();
     },
     express.raw({ type: 'application/json', limit: '5mb' }),
-    githubWebhookHandler(redisPublisher, newDeploymentId),
+    githubWebhookHandler(redisPublisher, newDeploymentId, deploymentUrl),
 );
 
 app.use('/api/auth', createAuthRouter(dashboardOrigin));
@@ -161,6 +171,7 @@ app.use('/api', createProjectRouter({
     workspaceDir: WORKSPACE_DIR,
     dashboardOrigin,
     port: PORT,
+    baseDomain,
     newDeploymentId,
     buildsEnabled: !offline,
     syncProductionRoute,

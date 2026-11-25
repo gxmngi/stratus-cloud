@@ -1,4 +1,6 @@
-export const API_URL = (process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000").replace(/\/$/, "");
+const loopback = typeof window !== "undefined" && window.location.protocol === "http:" &&
+  ["localhost", "127.0.0.1", "[::1]"].includes(window.location.hostname);
+export const API_URL = (process.env.NEXT_PUBLIC_API_URL || (loopback ? "http://localhost:4000" : "")).replace(/\/$/, "");
 let sessionEpoch = 0;
 export function advanceSessionEpoch() { sessionEpoch++; }
 
@@ -20,7 +22,8 @@ export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Pr
   const requestEpoch = sessionEpoch;
   const response = await fetch(input, { ...init, credentials: "include", signal: init?.signal ?? AbortSignal.timeout(15000) });
   const url = input instanceof Request ? input.url : String(input);
-  if (response.status === 401 && requestEpoch === sessionEpoch && !new URL(url, API_URL).pathname.startsWith("/api/auth/") && typeof window !== "undefined") {
+  if (response.status === 401 && requestEpoch === sessionEpoch && typeof window !== "undefined" &&
+      !new URL(url, window.location.origin).pathname.startsWith("/api/auth/")) {
     window.dispatchEvent(new Event("stratus:session-expired"));
   }
   return response;
@@ -46,5 +49,8 @@ export const authApi = {
 };
 
 export function logStreamUrl(deploymentId: string): string {
-  return `${API_URL.replace(/^http/, "ws")}/api/logs?deploymentId=${encodeURIComponent(deploymentId)}`;
+  const url = new URL(`${API_URL}/api/logs`, window.location.origin);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  url.searchParams.set("deploymentId", deploymentId);
+  return url.href;
 }

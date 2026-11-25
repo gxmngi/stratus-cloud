@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import { Request, Response } from 'express';
 import Redis from 'ioredis';
 import { dbService, db, type ProjectRecord } from './db';
+import { createDeploymentUrl } from './deployment-url';
 
 // Branch ที่จะ Deploy อัตโนมัติเมื่อมีการ push
 const DEPLOY_REFS = ['refs/heads/main', 'refs/heads/master'];
@@ -28,7 +29,7 @@ interface WebhookJob {
 }
 
 const reserveDelivery = db.transaction((project: ProjectRecord, deliveryId: string,
-    build: Omit<WebhookJob, 'deploymentId'>, newDeploymentId: () => string) => {
+    build: Omit<WebhookJob, 'deploymentId'>, newDeploymentId: () => string, deploymentUrl: (id: string) => string) => {
     const existing = db.prepare('SELECT job_json FROM github_deliveries WHERE project_id = ? AND delivery_id = ?')
         .get(project.id, deliveryId) as { job_json: string } | undefined;
     if (existing) return JSON.parse(existing.job_json) as WebhookJob;
@@ -39,7 +40,7 @@ const reserveDelivery = db.transaction((project: ProjectRecord, deliveryId: stri
         project_id: project.id,
         git_url: job.gitUrl,
         status: 'QUEUED',
-        live_url: `http://${job.deploymentId}.localhost:8000`,
+        live_url: deploymentUrl(job.deploymentId),
         trigger_type: 'webhook',
         commit_sha: job.commitSha,
         commit_message: job.commitMessage,
@@ -77,7 +78,7 @@ interface PushPayload {
  * Handler สำหรับ POST /api/webhooks/github
  * ต้องใช้ express.raw() ก่อนหน้า เพื่อให้ได้ Raw Body สำหรับตรวจ HMAC
  */
-export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => string) {
+export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => string, deploymentUrl = createDeploymentUrl()) {
     return async (req: Request, res: Response) => {
         const secret = process.env.GITHUB_WEBHOOK_SECRET;
         if (!secret) {
@@ -154,7 +155,7 @@ export function githubWebhookHandler(publisher: Redis, newDeploymentId: () => st
             commitSha,
             commitMessage: (payload.head_commit?.message ?? '').split('\n')[0],
             pusher: payload.pusher?.name ?? 'unknown',
-        }, newDeploymentId);
+        }, newDeploymentId, deploymentUrl);
         if (job.commitSha !== commitSha || job.repository !== repoFullName) {
             res.status(409).json({ error: 'Delivery ID is already associated with a different push' });
             return;
