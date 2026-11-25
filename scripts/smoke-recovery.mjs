@@ -69,7 +69,7 @@ async function freePort() {
     return port;
 }
 const request = (route, method = 'GET', body) => fetch(`http://127.0.0.1:${apiPort}${route}`, {
-    method, signal: AbortSignal.timeout(5000), headers: { Origin: origin, Cookie: cookie,
+    method, signal: AbortSignal.timeout(5000), headers: { Origin: origin, Cookie: cookie, Connection: 'close',
         ...(body ? { 'Content-Type': 'application/json' } : {}) },
     ...(body ? { body: JSON.stringify(body) } : {}),
 });
