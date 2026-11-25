@@ -21,7 +21,8 @@ function readOutcome(payload: string): DeploymentBuildOutcome | undefined {
     if (result.runtimeType === 'dynamic' && 'containerPort' in result &&
         typeof result.containerPort === 'number' && Number.isInteger(result.containerPort) &&
         result.containerPort >= 1 && result.containerPort <= 65535) {
-        return { status: 'READY', runtimeType: 'dynamic', port: result.containerPort, completedAt };
+        return { status: 'READY', runtimeType: 'dynamic', port: result.containerPort,
+            networked: 'networked' in result && result.networked === true, completedAt };
     }
 }
 

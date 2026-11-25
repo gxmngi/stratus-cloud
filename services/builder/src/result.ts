@@ -15,10 +15,11 @@ export async function publishBuildResult(redis: Redis, job: BuildOptions, result
     const channel = `logs:${job.deploymentId}`;
     if (result.success) {
         await redis.publish(channel, result.runtimeType === 'dynamic'
-            ? `[INFO] Allocated dynamic host port: ${result.containerPort}`
+            ? '[INFO] Dynamic runtime is ready'
             : '[INFO] Static build succeeded');
         await redis.publish('proxy:routes', JSON.stringify({ action: 'set', subdomain: job.deploymentId,
-            type: result.runtimeType, ...(result.containerPort ? { port: result.containerPort } : {}) }));
+            type: result.runtimeType, ...(result.containerPort ? { port: result.containerPort } : {}),
+            ...(result.networked ? { networked: true } : {}) }));
     }
     await redis.publish(channel, result.success ? '[STATUS] READY' : `[STATUS] FAILED: ${buildFailureMessage(job, result)}`);
     const meta = job as BuildOptions & Partial<WebhookMeta>;

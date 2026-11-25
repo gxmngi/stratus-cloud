@@ -71,6 +71,20 @@ test.describe('Readiness Probe & Health Checks', () => {
         assert.match(result.error || '', /Container exited unexpectedly with status 137/);
     });
 
+    test('an explicit runtime address cannot be marked ready by a loopback service', async () => {
+        const server = http.createServer((_req, res) => res.end('unrelated service'));
+        await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+        try {
+            const port = (server.address() as net.AddressInfo).port;
+            const container = { inspect: async () => ({ State: { Running: true } }) } as unknown as Docker.Container;
+            const result = await waitForContainerReadiness(container, port, { host: '127.0.0.2', timeoutMs: 150, intervalMs: 10 });
+            assert.equal(result.ready, false);
+            assert.match(result.error ?? '', /127\.0\.0\.2/);
+        } finally {
+            await new Promise<void>(resolve => server.close(() => resolve()));
+        }
+    });
+
     test('waitForContainerReadiness succeeds when live server responds', async () => {
         const server = http.createServer((req, res) => {
             res.writeHead(200, { 'Content-Type': 'text/plain' });

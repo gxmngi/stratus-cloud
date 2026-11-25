@@ -13,6 +13,17 @@ services:
     ports: !reset []
     environment:
       TLS_DOMAINS: ""
+      STRATUS_PUBLIC_HTTPS: "1"
+    networks:
+      - default
+      - runtime
+
+  builder:
+    environment:
+      STRATUS_RUNTIME_NETWORK: ${STRATUS_RUNTIME_NETWORK:-stratus-runtime}
+    networks:
+      - default
+      - runtime
 
   web:
     ports: !reset []
@@ -36,3 +47,8 @@ services:
         condition: service_healthy
       web:
         condition: service_started
+
+networks:
+  runtime:
+    name: ${STRATUS_RUNTIME_NETWORK:-stratus-runtime}
+    internal: true

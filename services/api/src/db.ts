@@ -60,6 +60,7 @@ export function initDatabase() {
             build_command TEXT,
             runtime_type TEXT DEFAULT 'static',
             container_port INTEGER,
+            container_networked INTEGER NOT NULL DEFAULT 0,
             trigger_type TEXT DEFAULT 'manual',
             commit_sha TEXT,
             commit_message TEXT,
@@ -92,6 +93,9 @@ export function initDatabase() {
     try { db.exec('ALTER TABLE projects ADD COLUMN previous_production_deployment_id TEXT'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN runtime_type TEXT DEFAULT "static"'); } catch {}
     try { db.exec('ALTER TABLE deployments ADD COLUMN container_port INTEGER'); } catch {}
+    if (!(db.pragma('table_info(deployments)') as { name: string }[]).some(column => column.name === 'container_networked')) {
+        db.exec('ALTER TABLE deployments ADD COLUMN container_networked INTEGER NOT NULL DEFAULT 0');
+    }
 
     addProjectOwnership(db);
     db.exec(`
@@ -151,12 +155,13 @@ export interface ProductionRoute {
     aliasOf: string;
     type: 'static' | 'dynamic';
     port: number | null;
+    networked: boolean;
     revision: number;
 }
 
 export type DeploymentBuildOutcome = (
     | { status: 'READY'; runtimeType: 'static'; port: null }
-    | { status: 'READY'; runtimeType: 'dynamic'; port: number }
+    | { status: 'READY'; runtimeType: 'dynamic'; port: number; networked?: boolean }
     | { status: 'FAILED'; error: string }
 ) & { completedAt?: number };
 
@@ -276,12 +281,13 @@ export const dbService = {
     },
 
     getProductionRoutes(slug?: string): ProductionRoute[] {
-        return db.prepare(`
+        const routes = db.prepare(`
             SELECT p.slug AS subdomain, d.id AS aliasOf, COALESCE(d.runtime_type, 'static') AS type,
-                d.container_port AS port, p.production_route_revision AS revision
+                d.container_port AS port, d.container_networked AS networked, p.production_route_revision AS revision
             FROM projects p JOIN deployments d ON d.id = p.production_deployment_id
             WHERE p.slug IS NOT NULL AND d.status = 'READY' AND (? IS NULL OR p.slug = ?)
-        `).all(slug ?? null, slug ?? null) as ProductionRoute[];
+        `).all(slug ?? null, slug ?? null) as (Omit<ProductionRoute, 'networked'> & { networked: number })[];
+        return routes.map(route => ({ ...route, networked: route.networked === 1 }));
     },
 
     createDeployment(record: Omit<DeploymentRecord, 'duration_ms' | 'completed_at'>): void {
@@ -328,9 +334,10 @@ export const dbService = {
             const ready = outcome.status === 'READY';
             const deployment = db.prepare(`
                 UPDATE deployments SET status = ?, runtime_type = COALESCE(?, runtime_type),
-                    container_port = ?, error_message = ?, completed_at = ?, duration_ms = MAX(0, ? - created_at)
+                    container_port = ?, container_networked = ?, error_message = ?, completed_at = ?, duration_ms = MAX(0, ? - created_at)
                 WHERE id = ? AND status IN ('QUEUED', 'BUILDING') RETURNING *
             `).get(outcome.status, ready ? outcome.runtimeType : null, ready ? outcome.port : null,
+                ready && outcome.runtimeType === 'dynamic' && outcome.networked ? 1 : 0,
                 ready ? null : outcome.error, completedAt, completedAt, id) as DeploymentRecord | undefined;
             if (!ready || !deployment?.project_id) return;
 

@@ -11,6 +11,7 @@ import { reservedRuntimePorts } from './runtime-ports';
 
 const docker = new Docker();
 const NODE_IMAGE = 'node:22-alpine';
+const RUNTIME_PORT = 3000;
 
 // WORKSPACE_DIR: path ภายใน Process นี้ (ใน Container คือ /workspace)
 // HOST_WORKSPACE_PATH: path เดียวกันบน Host ที่ Docker Engine มองเห็น ใช้สำหรับ Bind Mount ของ Sandbox
@@ -45,6 +46,7 @@ export interface BuildResult {
     artifactPath: string | null;
     runtimeType?: 'static' | 'dynamic';
     containerPort?: number | null;
+    networked?: boolean;
     error?: string;
     publicError?: string;
     completedAt?: number;
@@ -400,33 +402,42 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Detected dynamic server application`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Launching application container: "${startCmd}"`);
 
-        const allocatedPort = await findAvailablePort(4100, 4999, await reservedRuntimePorts(docker));
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Allocated dynamic host port: ${allocatedPort}`);
+        const runtimeNetwork = process.env.STRATUS_RUNTIME_NETWORK?.trim();
+        const containerName = `stratus-${deploymentId}`;
+        const port = runtimeNetwork ? RUNTIME_PORT : await findAvailablePort(4100, 4999, await reservedRuntimePorts(docker));
+        const runtimePortKey = `${RUNTIME_PORT}/tcp`;
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Runtime endpoint: ${runtimeNetwork ? `${containerName}:${port}` : `host port ${port}`}`);
 
-        let runContainer: Docker.Container;
+        let runContainer: Docker.Container | undefined;
         try {
             await assertLease();
+            if (runtimeNetwork) {
+                const network = await docker.getNetwork(runtimeNetwork).inspect();
+                if (network.Driver !== 'bridge' || !network.Internal) {
+                    throw new Error('STRATUS_RUNTIME_NETWORK must name an internal Docker bridge');
+                }
+            }
             // Recovery has already removed only labelled containers owned by this deployment.
             runContainer = await docker.createContainer({
-                name: `stratus-${deploymentId}`,
+                name: containerName,
                 Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'runtime' },
                 Image: NODE_IMAGE,
                 Cmd: ['sh', '-c', startCmd],
                 WorkingDir: '/app',
                 Env: [
                     ...formattedEnv,
-                    'PORT=3000',
+                    `PORT=${RUNTIME_PORT}`,
                     'NODE_ENV=production',
                     `STRATUS_DEPLOYMENT_ID=${deploymentId}`,
                 ],
                 ExposedPorts: {
-                    '3000/tcp': {},
+                    [runtimePortKey]: {},
                 },
                 HostConfig: {
                     Binds: [`${hostMountPath}:/app`],
-                    PortBindings: {
-                        '3000/tcp': [{ HostPort: String(allocatedPort), HostIp: '0.0.0.0' }],
-                    },
+                    ...(runtimeNetwork ? { NetworkMode: runtimeNetwork } : {
+                        PortBindings: { [runtimePortKey]: [{ HostPort: String(port), HostIp: '0.0.0.0' }] },
+                    }),
                     Memory: 1024 * 1024 * 1024,
                     MemorySwap: 1024 * 1024 * 1024,
                     CpuQuota: 100000,
@@ -449,6 +460,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             await assertLease();
             await runContainer.start();
         } catch (err: unknown) {
+            await runContainer?.remove({ force: true }).catch(() => {});
             const errorMsg = err instanceof Error ? err.message : String(err);
             await emitLog(deploymentId, `[ERROR] [${deploymentId}] Failed to launch container: ${errorMsg}`);
             return {
@@ -461,8 +473,9 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         }
 
         // Active readiness health probe
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Initiating active readiness health probe on port ${allocatedPort}...`);
-        const probeResult = await waitForContainerReadiness(runContainer, allocatedPort, {
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Initiating active readiness health probe on port ${port}...`);
+        const probeResult = await waitForContainerReadiness(runContainer, port, {
+            host: runtimeNetwork ? containerName : undefined,
             timeoutMs: 15000,
             intervalMs: 500,
         });
@@ -470,10 +483,8 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
         if (!probeResult.ready) {
             await emitLog(deploymentId, `[ERROR] [${deploymentId}] Readiness health check failed: ${probeResult.error}`);
             // Terminate unhealthy container to avoid leaking resources
-            try {
-                await runContainer.stop({ t: 2 });
-                await runContainer.remove({ force: true });
-            } catch {}
+            await runContainer.stop({ t: 2 }).catch(() => {});
+            await runContainer.remove({ force: true }).catch(() => {});
             return {
                 success: false,
                 exitCode: 1,
@@ -489,23 +500,25 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             path.join(workspaceDir, 'runtime.json'),
             JSON.stringify({
                 type: 'dynamic',
-                port: allocatedPort,
+                port,
+                ...(runtimeNetwork ? { networked: true } : {}),
                 containerId: runContainer.id,
-                targetPort: 3000,
+                targetPort: RUNTIME_PORT,
                 updatedAt: Date.now(),
             }, null, 2)
         );
 
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Readiness health check passed in ${probeResult.latencyMs}ms (HTTP ${probeResult.statusCode ?? 200})`);
 
-        await emitLog(deploymentId, `[INFO] [${deploymentId}] Dynamic container running at http://${deploymentId}.localhost:8000`);
+        await emitLog(deploymentId, `[INFO] [${deploymentId}] Dynamic container is ready`);
 
         return {
             success: true,
             exitCode: 0,
             artifactPath: null,
             runtimeType: 'dynamic',
-            containerPort: allocatedPort,
+            containerPort: port,
+            ...(runtimeNetwork ? { networked: true } : {}),
         };
     }
 
