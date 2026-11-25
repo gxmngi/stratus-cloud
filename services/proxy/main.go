@@ -131,6 +131,7 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 		select {
 		case <-ticker.C:
 			p.reconcileProductionRoutes(ctx)
+			p.reconcileDeletedPreviews(ctx)
 		case event, ok := <-ch:
 			if !ok {
 				return
@@ -139,6 +140,9 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 			case *redis.Subscription:
 				if value.Kind == "subscribe" && value.Channel == productionRouteChannel {
 					p.reconcileProductionRoutes(ctx)
+				}
+				if value.Kind == "subscribe" && value.Channel == "proxy:routes" {
+					p.reconcileDeletedPreviews(ctx)
 				}
 			case *redis.Message:
 				msg = value
@@ -160,6 +164,12 @@ func (p *ProxyHandler) startRedisRouteSubscriber() {
 
 		switch rMsg.Action {
 		case "set":
+			lookup, cancel := context.WithTimeout(ctx, 2*time.Second)
+			deleted, err := p.redisClient.SIsMember(lookup, deletedPreviewsKey, rMsg.Subdomain).Result()
+			cancel()
+			if err != nil || deleted {
+				continue
+			}
 			if rMsg.Type == string(RouteTypeDynamic) && rMsg.Port > 0 {
 				p.setUnversionedRoute(rMsg.Subdomain, p.createDynamicRouteEntry(rMsg.Subdomain, rMsg.Port, rMsg.AliasOf, rMsg.Networked))
 				log.Printf("[ROUTER] In-memory route registered: %s -> dynamic port %d (aliasOf: %s)", rMsg.Subdomain, rMsg.Port, rMsg.AliasOf)

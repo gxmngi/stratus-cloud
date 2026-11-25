@@ -117,9 +117,28 @@ container. The restored proxy serves B before the API starts. The restored API
 then reads the saved project with the original session and rolls back to A.
 [Static installation backup and restore](static-compose-restore.md)
 
+The test also deletes a dynamic preview and interrupts the builder before
+cleanup can be confirmed. The restarted builder completes the same deletion.
+The API retains the deployment while cleanup is pending, and the production
+deployment stays reachable.
+
 The check removes its processes, labelled test containers and temporary workspace,
 and saves `services/data/build-recovery-report.json` (ignored by Git). It does not
 stop or change the user's local stack. CI runs this check in the builder job.
+
+## Deployment deletion
+
+`DELETE /api/deployments/ID` returns `202` while cleanup is pending. The
+deployment remains visible as `DELETING`. The API records the request in SQLite
+and retries delivery to Redis. The builder removes matching labelled containers
+and the workspace, then records a durable preview-route deletion in Redis. The
+API removes the deployment record after that confirmation. A repeated request
+by the same owner returns `200` once deletion finishes.
+
+Active production deployments and builds still in progress return `409`. A
+deployment queued for deletion cannot be promoted or selected for rollback. If
+cleanup remains pending, inspect builder logs for `[TEARDOWN]` and correct the
+underlying Docker or workspace error. The builder retries failed jobs.
 
 ## Limits and next checks
 

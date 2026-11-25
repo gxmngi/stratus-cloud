@@ -80,6 +80,16 @@ export function initDatabase() {
             FOREIGN KEY(deployment_id) REFERENCES deployments(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS deployment_deletions (
+            deployment_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            requested_at INTEGER NOT NULL,
+            completed_at INTEGER
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_deployment_deletions_pending ON deployment_deletions(deployment_id)
+            WHERE completed_at IS NULL;
+
         CREATE INDEX IF NOT EXISTS idx_deployments_created_at ON deployments(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
         CREATE INDEX IF NOT EXISTS idx_deployments_pending ON deployments(id)
@@ -128,7 +138,7 @@ export interface DeploymentRecord {
     id: string;
     project_id: string | null;
     git_url: string;
-    status: 'QUEUED' | 'BUILDING' | 'READY' | 'FAILED';
+    status: 'QUEUED' | 'BUILDING' | 'READY' | 'FAILED' | 'DELETING';
     live_url: string;
     build_command?: string | null;
     runtime_type?: 'static' | 'dynamic';
@@ -212,27 +222,16 @@ export const dbService = {
         `).get(deploymentId) as ProjectRecord | undefined;
     },
 
-    setProjectProductionDeployment(projectId: string, deploymentId: string): void {
-        const now = Date.now();
-        const current = db.prepare('SELECT production_deployment_id FROM projects WHERE id = ?').get(projectId) as { production_deployment_id?: string | null } | undefined;
-        const previousId = (current && current.production_deployment_id && current.production_deployment_id !== deploymentId)
-            ? current.production_deployment_id
-            : undefined;
-
-        if (previousId) {
-            db.prepare(`
-                UPDATE projects 
-                SET previous_production_deployment_id = ?, production_deployment_id = ?, updated_at = ?,
-                    production_route_revision = production_route_revision + 1
-                WHERE id = ?
-            `).run(previousId, deploymentId, now, projectId);
-        } else {
-            db.prepare(`
-                UPDATE projects 
-                SET production_deployment_id = ?, updated_at = ?, production_route_revision = production_route_revision + 1
-                WHERE id = ?
-            `).run(deploymentId, now, projectId);
-        }
+    setProjectProductionDeployment(projectId: string, deploymentId: string): boolean {
+        return db.prepare(`
+            UPDATE projects SET previous_production_deployment_id = CASE
+                WHEN production_deployment_id IS NOT NULL AND production_deployment_id <> '' AND production_deployment_id <> @deployment
+                THEN production_deployment_id ELSE previous_production_deployment_id END,
+                production_deployment_id = @deployment, updated_at = @now,
+                production_route_revision = production_route_revision + 1
+            WHERE id = @project AND EXISTS (SELECT 1 FROM deployments
+                WHERE id = @deployment AND project_id = @project AND status = 'READY')
+        `).run({ deployment: deploymentId, project: projectId, now: Date.now() }).changes === 1;
     },
 
     rollbackProjectProductionDeployment(projectId: string): { 
@@ -241,37 +240,39 @@ export const dbService = {
         restoredDeployment?: DeploymentRecord; 
         previousDeploymentId?: string 
     } {
-        const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as ProjectRecord | undefined;
-        if (!project) {
-            return { success: false, error: 'Project not found' };
-        }
-        if (!project.previous_production_deployment_id) {
-            return { success: false, error: 'No previous production deployment available for rollback' };
-        }
+        return db.transaction(() => {
+            const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(projectId) as ProjectRecord | undefined;
+            if (!project) {
+                return { success: false, error: 'Project not found' };
+            }
+            if (!project.previous_production_deployment_id) {
+                return { success: false, error: 'No previous production deployment available for rollback' };
+            }
 
-        const restoredDeployment = db.prepare('SELECT * FROM deployments WHERE id = ?').get(project.previous_production_deployment_id) as DeploymentRecord | undefined;
-        if (!restoredDeployment) {
-            return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} not found in database` };
-        }
-        if (restoredDeployment.status !== 'READY') {
-            return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} is in status ${restoredDeployment.status}, cannot rollback` };
-        }
+            const restoredDeployment = db.prepare('SELECT * FROM deployments WHERE id = ?').get(project.previous_production_deployment_id) as DeploymentRecord | undefined;
+            if (!restoredDeployment) {
+                return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} not found in database` };
+            }
+            if (restoredDeployment.status !== 'READY') {
+                return { success: false, error: `Previous deployment ${project.previous_production_deployment_id} is in status ${restoredDeployment.status}, cannot rollback` };
+            }
 
-        const now = Date.now();
-        const oldProductionId = project.production_deployment_id || null;
+            const now = Date.now();
+            const oldProductionId = project.production_deployment_id || null;
 
-        db.prepare(`
-            UPDATE projects 
-            SET production_deployment_id = ?, previous_production_deployment_id = ?, updated_at = ?,
-                production_route_revision = production_route_revision + 1
-            WHERE id = ?
-        `).run(restoredDeployment.id, oldProductionId, now, projectId);
+            db.prepare(`
+                UPDATE projects
+                SET production_deployment_id = ?, previous_production_deployment_id = ?, updated_at = ?,
+                    production_route_revision = production_route_revision + 1
+                WHERE id = ?
+            `).run(restoredDeployment.id, oldProductionId, now, projectId);
 
-        return {
-            success: true,
-            restoredDeployment,
-            previousDeploymentId: oldProductionId || undefined,
-        };
+            return {
+                success: true as const,
+                restoredDeployment,
+                previousDeploymentId: oldProductionId || undefined,
+            };
+            }).immediate();
     },
 
     getAllProjects(): ProjectRecord[] {
@@ -394,31 +395,15 @@ export const dbService = {
         `).get(id) as DeploymentRecord | undefined;
     },
 
+    isDeploymentIdUsed(id: string): boolean {
+        return Boolean(db.prepare('SELECT id FROM deployments WHERE id = ? UNION ALL SELECT deployment_id FROM deployment_deletions WHERE deployment_id = ? LIMIT 1')
+            .get(id, id));
+    },
+
     getDeploymentLogs(id: string): LogRecord[] {
         return db.prepare(`
             SELECT * FROM deployment_logs WHERE deployment_id = ? ORDER BY id ASC
         `).all(id) as LogRecord[];
     },
 
-    deleteDeployment(id: string): { success: boolean; error?: string } {
-        const deployment = db.prepare('SELECT * FROM deployments WHERE id = ?').get(id) as DeploymentRecord | undefined;
-        if (!deployment) {
-            return { success: false, error: 'Deployment not found' };
-        }
-
-        if (deployment.project_id) {
-            const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(deployment.project_id) as ProjectRecord | undefined;
-            if (project && project.production_deployment_id === id) {
-                return { 
-                    success: false, 
-                    error: `Cannot delete deployment ${id} because it is currently the active production deployment for project "${project.name}". Promote another deployment or rollback before deleting.` 
-                };
-            }
-        }
-
-        db.prepare('DELETE FROM deployment_logs WHERE deployment_id = ?').run(id);
-        db.prepare('DELETE FROM deployments WHERE id = ?').run(id);
-
-        return { success: true };
-    }
 };

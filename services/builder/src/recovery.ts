@@ -15,6 +15,9 @@ export async function cleanupInterruptedBuild(deploymentId: string) {
         if (info.Config.Labels?.['stratus.deployment'] !== deploymentId) {
             throw new Error(`Refusing to remove an unlabelled container: ${name}`);
         }
-        await container.remove({ force: true });
+        try { await docker.getContainer(info.Id).remove({ force: true }); }
+        catch (error) {
+            if ((error as { statusCode?: number }).statusCode !== 404) throw error;
+        }
     }
 }

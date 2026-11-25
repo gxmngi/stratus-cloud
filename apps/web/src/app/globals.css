@@ -706,10 +706,12 @@ svg {
 .status-badge.failed > span {
   background: #c96470;
 }
-.status-badge.queued {
+.status-badge.queued,
+.status-badge.deleting {
   color: #805b18;
 }
-.status-badge.queued > span {
+.status-badge.queued > span,
+.status-badge.deleting > span {
   background: #c09443;
 }
 .deployment-detail {

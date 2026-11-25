@@ -86,12 +86,9 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             githubWebhookHandler(publisher, () => `dep-webhook-${++webhookId}`, createDeploymentUrl(baseDomain)));
         app.use(express.json());
         app.use('/api', createProjectRouter({
-            publisher, dashboardOrigin: origin, workspaceDir: process.env.TEST_WORKSPACE_DIR!, port: 4000, baseDomain,
+            publisher, dashboardOrigin: origin, port: 4000, baseDomain,
             newDeploymentId: () => `new-dep-${calls.length}`,
             syncProductionRoute: async () => { calls.push('route'); },
-            teardown: async () => { calls.push('teardown'); return {
-                success: true, containerRemoved: true, routeRemoved: true, diskCleaned: true,
-            }; },
         }));
         server = await new Promise(resolve => {
             const instance = app.listen(0, '127.0.0.1', () => resolve(instance));
@@ -169,8 +166,11 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         assert.equal(dbService.getProject(projectId)?.production_deployment_id, 'previous-dep');
         assert.equal((await request('/api/deployments/owned-dep/rollback', alice, 'POST', {})).status, 200);
         assert.equal(dbService.getProject(projectId)?.production_deployment_id, 'owned-dep');
-        assert.equal((await request('/api/deployments/previous-dep', alice, 'DELETE')).status, 200);
-        assert.ok(calls.includes('teardown'));
+        assert.equal((await request('/api/deployments/owned-dep', alice, 'DELETE')).status, 409);
+        assert.equal((await request('/api/deployments/previous-dep', alice, 'DELETE')).status, 202);
+        assert.equal((await request('/api/deployments/previous-dep', alice, 'DELETE')).status, 202);
+        assert.equal((await request('/api/deployments/previous-dep', bob, 'DELETE')).status, 404);
+        assert.equal(dbService.getDeployment('previous-dep')?.status, 'DELETING');
     });
 
     test('deploy assigns ownership from the session and ignores a forged owner ID', async () => {
@@ -331,7 +331,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     test('auth development mode rejects deployment mutations before contacting infrastructure', async () => {
         const app = express();
         app.use(express.json());
-        app.use('/api', createProjectRouter({ publisher, workspaceDir: process.env.TEST_WORKSPACE_DIR!,
+        app.use('/api', createProjectRouter({ publisher,
             dashboardOrigin: origin, port: 4000, newDeploymentId: () => 'offline-dep',
             buildsEnabled: false, syncProductionRoute: async () => { throw new Error('Must not publish routes'); },
         }));

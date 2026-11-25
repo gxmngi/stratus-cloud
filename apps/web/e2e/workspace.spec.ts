@@ -115,7 +115,7 @@ test("delete confirmation keeps its target when the deployment list refreshes", 
   const pending = {
     id: "dep-confirm-pending",
     git_url: "fixtures/pending-preview",
-    status: "BUILDING",
+    status: "READY",
     live_url: "about:blank",
     created_at: Date.now(),
   };
@@ -125,7 +125,8 @@ test("delete confirmation keeps its target when the deployment list refreshes", 
     git_url: "fixtures/replacement-preview",
     status: "READY",
   };
-  let deployments = [pending, replacement];
+  const deleting = { ...replacement, id: "dep-confirm-deleting", git_url: "fixtures/deleting-preview", status: "DELETING" };
+  let deployments = [pending, replacement, deleting];
   const deleteTargets: string[] = [];
 
   await page.route("**/api/deployments?limit=20", (route) =>
@@ -149,4 +150,27 @@ test("delete confirmation keeps its target when the deployment list refreshes", 
 
   await dialog.getByRole("button", { name: "Delete deployment", exact: true }).click();
   await expect.poll(() => deleteTargets).toEqual([pending.id]);
+});
+
+test("accepted deletion stays visible until cleanup finishes", async ({ page }) => {
+  const preview = {
+    id: "dep-delete-queued", git_url: "fixtures/queued-deletion-preview", status: "READY",
+    live_url: "about:blank", created_at: Date.now(),
+  };
+  let deployments = [preview];
+  await page.route("**/api/deployments?limit=20", route => route.fulfill({ json: { deployments } }));
+  await page.route("**/api/deployments/dep-delete-queued", route => {
+    if (route.request().method() !== "DELETE") return route.fallback();
+    deployments = [{ ...preview, status: "DELETING" }];
+    return route.fulfill({ status: 202, json: { deploymentId: preview.id, status: "DELETING" } });
+  });
+  await page.reload();
+  const history = page.getByLabel("Deployment history");
+  const entry = history.getByRole("button", { name: /queued-deletion-preview/ });
+  await expect(entry).toBeVisible();
+  await page.getByRole("button", { name: "Delete deployment", exact: true }).click();
+  await page.getByRole("dialog").getByRole("button", { name: "Delete deployment", exact: true }).click();
+  await expect(entry).toContainText("Deleting");
+  deployments = [];
+  await expect(entry).toHaveCount(0);
 });
