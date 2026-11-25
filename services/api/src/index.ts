@@ -45,7 +45,7 @@ async function syncProductionRoute(slug: string) {
         const aliasDir = path.join(WORKSPACE_DIR, slug);
         fs.mkdirSync(aliasDir, { recursive: true });
         fs.writeFileSync(path.join(aliasDir, 'alias.json'), JSON.stringify({
-            target: route.aliasOf, type: route.type, port: route.port, revision: route.revision,
+            target: route.aliasOf, type: route.type, port: route.port, networked: route.networked, revision: route.revision,
         }));
     } catch (error) {
         console.error(`[FS] Could not save route fallback for ${slug}:`, error);

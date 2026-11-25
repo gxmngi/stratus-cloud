@@ -62,8 +62,17 @@ to the API. Deployment hostnames go to the Stratus proxy. The HTTPS override
 keeps the web, API, and Stratus proxy ports on the Compose network. Keep the
 dashboard hostname outside `BASE_DOMAIN` so a deployment cannot claim it.
 Continue using both Compose files for subsequent operations.
-Use a static fixture for the checks below. Verify dynamic runtime networking
-on the target host before serving dynamic deployments publicly.
+
+New dynamic deployments listen on port 3000 on the internal `stratus-runtime`
+Docker network. The builder probes the container by name and the Stratus proxy
+routes to the same name. Dynamic deployments share this network with the builder,
+proxy, and other runtimes in the installation. This network has no external
+egress. Set a distinct `STRATUS_RUNTIME_NETWORK` for each installation on a host.
+
+When upgrading a host that already has dynamic deployments with published ports,
+deploy a new revision through the HTTPS stack, verify it, and promote it. Remove
+the superseded runtime containers from the Docker host when you no longer need
+them for rollback. Existing containers retain their original port bindings.
 
 ## Verify deployment and rollback
 
@@ -96,3 +105,8 @@ on the target host before serving dynamic deployments publicly.
 
 Keep the SQLite and Redis volumes and the workspace when restarting. See
 [build recovery](build-recovery.md#limits-and-next-checks) for restore guidance.
+
+For a dynamic deployment, deploy a Node app that listens on `0.0.0.0:3000`.
+Open its preview and production URLs over HTTPS. On the Docker host, use
+`docker port stratus-DEPLOYMENT_ID` and confirm that it prints no port mappings.
+Restart `proxy` with both Compose files and verify the production URL again.

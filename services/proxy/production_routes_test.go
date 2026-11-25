@@ -54,6 +54,29 @@ func TestInternalRoutesRejectProductionOverride(t *testing.T) {
 	}
 }
 
+func TestPrivateRuntimeTargetsSurviveRouteRecovery(t *testing.T) {
+	proxy := &ProxyHandler{workspaceBase: t.TempDir(), publicHTTPS: true, routes: make(map[string]*RouteEntry)}
+	previewDir := filepath.Join(proxy.workspaceBase, "dep-a")
+	if err := os.MkdirAll(previewDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(previewDir, "runtime.json"), []byte(`{"type":"dynamic","port":3000,"networked":true}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"networked":true,"revision":1}`, "project")
+	for _, host := range []string{"project", "dep-a"} {
+		route := proxy.GetRoute(host)
+		if route == nil || route.UpstreamURL.Host != "stratus-dep-a:3000" {
+			t.Fatalf("%s did not recover the private runtime target: %v", host, route)
+		}
+		req := httptest.NewRequest(http.MethodGet, "http://"+host+".apps.example.test/", nil)
+		route.ReverseProxy.Director(req)
+		if req.Header.Get("X-Forwarded-Proto") != "https" {
+			t.Fatalf("%s did not forward the scheme used at the ingress", host)
+		}
+	}
+}
+
 func TestMissingArtifactDoesNotConsumeProductionRevision(t *testing.T) {
 	proxy := &ProxyHandler{workspaceBase: t.TempDir(), routes: make(map[string]*RouteEntry)}
 	payload := `{"subdomain":"project","aliasOf":"dep-a","type":"static","revision":0}`

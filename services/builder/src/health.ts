@@ -3,6 +3,7 @@ import http from 'http';
 import Docker from 'dockerode';
 
 export interface ReadinessProbeOptions {
+    host?: string;
     timeoutMs?: number;
     intervalMs?: number;
 }
@@ -92,13 +93,13 @@ export function probeHttpEndpoint(port: number, host = '127.0.0.1', timeoutMs = 
  */
 export async function waitForContainerReadiness(
     container: Docker.Container,
-    hostPort: number,
+    port: number,
     options: ReadinessProbeOptions = {}
 ): Promise<ReadinessProbeResult> {
     const timeoutMs = options.timeoutMs ?? 15000;
     const intervalMs = options.intervalMs ?? 500;
     const start = Date.now();
-    const probeHost = process.env.PROBE_HOST || 'host.docker.internal';
+    const probeHost = options.host ?? (process.env.PROBE_HOST || 'host.docker.internal');
 
     while (Date.now() - start < timeoutMs) {
         // 1. Inspect container state to detect instant crashes
@@ -122,10 +123,10 @@ export async function waitForContainerReadiness(
             };
         }
 
-        // 2. Probe HTTP endpoint (try probeHost, then fallback to 127.0.0.1)
-        let httpResult = await probeHttpEndpoint(hostPort, probeHost);
-        if (!httpResult.ok && probeHost !== '127.0.0.1') {
-            httpResult = await probeHttpEndpoint(hostPort, '127.0.0.1');
+        // Only legacy published ports can fall back to a loopback probe.
+        let httpResult = await probeHttpEndpoint(port, probeHost);
+        if (!options.host && !httpResult.ok && probeHost !== '127.0.0.1') {
+            httpResult = await probeHttpEndpoint(port, '127.0.0.1');
         }
         if (httpResult.ok) {
             return {
@@ -145,6 +146,6 @@ export async function waitForContainerReadiness(
     return {
         ready: false,
         latencyMs: Date.now() - start,
-        error: `Readiness probe timed out after ${timeoutMs}ms (host port ${hostPort} did not become responsive)`,
+        error: `Readiness probe timed out after ${timeoutMs}ms (${probeHost}:${port} did not become responsive)`,
     };
 }

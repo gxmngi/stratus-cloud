@@ -18,6 +18,7 @@ type productionRoute struct {
 	AliasOf   string    `json:"aliasOf"`
 	Type      RouteType `json:"type"`
 	Port      int       `json:"port"`
+	Networked bool      `json:"networked"`
 	Revision  *uint64   `json:"revision"`
 }
 
@@ -74,7 +75,7 @@ func (p *ProxyHandler) applyProductionRoute(route productionRoute) bool {
 		if route.Port < 1 || route.Port > 65535 {
 			return false
 		}
-		entry = p.createDynamicRouteEntry(route.Subdomain, route.Port, route.AliasOf)
+		entry = p.createDynamicRouteEntry(route.Subdomain, route.Port, route.AliasOf, route.Networked)
 	case RouteTypeStatic:
 		entry = p.createStaticRouteEntry(route.Subdomain, route.AliasOf)
 	}

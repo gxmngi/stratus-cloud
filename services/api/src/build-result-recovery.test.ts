@@ -39,6 +39,7 @@ test('recovery applies ready runtime data once and promotes only the first deplo
     assert.equal(completed.status, 'READY');
     assert.equal(completed.runtime_type, 'dynamic');
     assert.equal(completed.container_port, 4321);
+    assert.equal(dbService.getProductionRoutes(project.slug)[0].networked, false);
     assert.equal(completed.completed_at, completedAt);
     assert.equal(completed.duration_ms, completedAt - completed.created_at);
     assert.equal(dbService.getProjectByDeployment(first)?.production_deployment_id, first);
@@ -52,6 +53,23 @@ test('recovery applies ready runtime data once and promotes only the first deplo
     assert.equal(dbService.getDeployment(second)?.status, 'READY');
     assert.equal(dbService.getProjectByDeployment(second)?.production_deployment_id, first);
     assert.deepEqual(routes, [{ slug: project.slug, id: first, port: 4321 }]);
+});
+
+test('recovery persists the runtime network mode across promote and rollback', async () => {
+    const { project, queue, store, recovery } = setup('networked-replay');
+    queue('dep-networked');
+    queue('dep-legacy');
+    store('dep-networked', { success: true, runtimeType: 'dynamic', containerPort: 3000, networked: true });
+    store('dep-legacy', { success: true, runtimeType: 'dynamic', containerPort: 4321 });
+    await recovery.reconcile('dep-networked');
+    await recovery.reconcile('dep-legacy');
+    assert.deepEqual(dbService.getProductionRoutes(project.slug).map(({ aliasOf, port, networked }) => ({ aliasOf, port, networked })),
+        [{ aliasOf: 'dep-networked', port: 3000, networked: true }]);
+
+    dbService.setProjectProductionDeployment(project.id, 'dep-legacy');
+    assert.equal(dbService.getProductionRoutes(project.slug)[0].networked, false);
+    assert.equal(dbService.rollbackProjectProductionDeployment(project.id).success, true);
+    assert.equal(dbService.getProductionRoutes(project.slug)[0].networked, true);
 });
 
 test('recovery does not let missing journals starve later results or reveal legacy errors', async () => {
