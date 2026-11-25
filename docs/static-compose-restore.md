@@ -9,8 +9,9 @@ source code, and secrets. Restrict access and encrypt it before transferring it.
 Use the same Stratus image tag, Compose files, Redis version, and hostnames at
 both ends. Keep the release tag, environment configuration, and TLS material
 with your deployment records in secure storage. The files below do not recreate
-dynamic Docker containers on another host. Plan dynamic runtime recovery
-separately before retiring a host that serves dynamic apps.
+dynamic Docker containers on another host. Use the
+[dynamic runtime restore procedure](dynamic-compose-restore.md) to preserve the
+additional inputs for those deployments.
 
 ## Take a cold backup
 
