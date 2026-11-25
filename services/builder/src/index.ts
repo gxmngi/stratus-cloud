@@ -6,6 +6,7 @@ import { BuildWorker } from './worker';
 import { cleanupInterruptedBuild } from './recovery';
 import { publishBuildResult } from './result';
 import { createDeploymentDeletionWorker } from './deployment-deletions';
+import { createRuntimeMetricsWorker } from './telemetry';
 
 const redisConsumer = new Redis({
     host: process.env.REDIS_HOST || '127.0.0.1',
@@ -61,6 +62,12 @@ function processDeletions() {
 }
 control.on('ready', processDeletions);
 setInterval(processDeletions, 1000).unref();
+const sampleMetrics = createRuntimeMetricsWorker(control);
+setInterval(() => {
+    if (control.status === 'ready') {
+        void sampleMetrics().catch(error => console.error('[TELEMETRY] Worker could not read requests:', error));
+    }
+}, 1000).unref();
 function positiveSetting(name: string, fallback: number): number {
     const value = Number(process.env[name] || fallback);
     if (!Number.isInteger(value) || value <= 0) throw new Error(`Invalid ${name}`);

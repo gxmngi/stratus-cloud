@@ -43,7 +43,7 @@ interface ContainerMetrics {
   deploymentId: string;
   containerId?: string;
   runtimeType: "dynamic" | "static";
-  status: "running" | "exited" | "static" | "notFound";
+  status: "running" | "exited" | "static" | "notFound" | "unavailable";
   cpuPercent: number;
   memoryUsageBytes: number;
   memoryLimitBytes: number;
@@ -325,31 +325,32 @@ function Dashboard() {
     }
   };
 
-  // Poll container metrics when active deployment is selected
   useEffect(() => {
     if (!activeDeploymentId) {
       return;
     }
 
-    let isMounted = true;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const fetchMetrics = async () => {
       try {
         const res = await apiFetch(
           `${API_URL}/api/deployments/${activeDeploymentId}/stats`,
-          { credentials: "include" },
+          { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]) },
         );
-        if (res.ok && isMounted) {
-          const data = await res.json();
-          setMetrics(data.metrics);
-        }
-      } catch {}
+        const sample = res.ok ? (await res.json()).metrics : null;
+        if (!controller.signal.aborted) setMetrics(sample);
+      } catch {
+        if (!controller.signal.aborted) setMetrics(null);
+      } finally {
+        if (!controller.signal.aborted) timer = setTimeout(fetchMetrics, 3000);
+      }
     };
 
     fetchMetrics();
-    const interval = setInterval(fetchMetrics, 3000);
     return () => {
-      isMounted = false;
-      clearInterval(interval);
+      controller.abort();
+      clearTimeout(timer);
     };
   }, [activeDeploymentId]);
 
@@ -981,6 +982,13 @@ function Dashboard() {
                       <p className="runtime-note">
                         <Globe2 size={14} /> Static assets served through the
                         edge proxy.
+                      </p>
+                    )}
+                    {activeDeployment.runtime_type === "dynamic" && activeDeployment.status === "READY" && metrics?.status !== "running" && (
+                      <p className="runtime-note">
+                        <Activity size={14} />
+                        {metrics?.status === "notFound" ? "Runtime container not found." :
+                          metrics?.status === "exited" ? "Runtime container stopped." : "Runtime metrics unavailable. Retrying…"}
                       </p>
                     )}
                     <Terminal

@@ -267,8 +267,10 @@ export function createProjectRouter(options: {
 
         const metrics = await getDeploymentMetrics(
             deployment.id,
-            (deployment.runtime_type || 'static') as 'static' | 'dynamic'
+            deployment.runtime_type || 'static',
+            deployment.status === 'READY' && options.buildsEnabled !== false ? redisPublisher : undefined,
         );
+        res.set('Cache-Control', 'no-store');
         res.json({ metrics });
     });
 
