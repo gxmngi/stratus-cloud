@@ -111,6 +111,12 @@ The restarted proxy serves that release on the original production URL and
 then returns to the first release after rollback. The API and proxy use
 separate workspaces for this check.
 
+The test takes a cold copy of SQLite, Redis AOF data, and the workspace with
+release B selected. It restores the copy into fresh data paths and a new Redis
+container. The restored proxy serves B before the API starts. The restored API
+then reads the saved project with the original session and rolls back to A.
+[Static installation backup and restore](static-compose-restore.md)
+
 The check removes its processes, labelled test containers and temporary workspace,
 and saves `services/data/build-recovery-report.json` (ignored by Git). It does not
 stop or change the user's local stack. CI runs this check in the builder job.

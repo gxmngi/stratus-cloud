@@ -103,8 +103,9 @@ them for rollback. Existing containers retain their original port bindings.
 5. Roll back the project and verify that the production URL serves the first
    marker again. Remove the test webhook if it was temporary.
 
-Keep the SQLite and Redis volumes and the workspace when restarting. See
-[build recovery](build-recovery.md#limits-and-next-checks) for restore guidance.
+Keep the SQLite and Redis volumes and the workspace when restarting. Use the
+[static installation backup and restore runbook](static-compose-restore.md)
+to rehearse recovery on a separate host.
 
 For a dynamic deployment, deploy a Node app that listens on `0.0.0.0:3000`.
 Open its preview and production URLs over HTTPS. On the Docker host, use

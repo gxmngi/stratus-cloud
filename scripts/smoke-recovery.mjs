@@ -19,6 +19,7 @@ const apiRecoveryFixture = path.join(testRoot, 'api-recovery-fixture');
 const gitStaticFixture = path.join(testRoot, 'git-static-fixture');
 const workspace = path.join(testRoot, 'workspace');
 const redisName = `stratus-recovery-${runId}`;
+const restoredRedisName = `${redisName}-restored`;
 const buildNamespace = 'stratus:build:smoke-recovery';
 const webhookSecret = randomUUID();
 const children = [];
@@ -125,7 +126,7 @@ const gate = setInterval(() => {
     process.env.DOCKER_HOST = dockerHost;
     docker = new Docker();
     command(['run', '-d', '--name', redisName, '--label', `stratus.recovery.test=${runId}`,
-        '-p', '127.0.0.1::6379', 'redis:7-alpine']);
+        '-p', '127.0.0.1::6379', 'redis:7-alpine', 'redis-server', '--appendonly', 'yes']);
     const redisPort = JSON.parse(command(['inspect', redisName]))[0].NetworkSettings.Ports['6379/tcp'][0].HostPort;
     redis = new Redis({ host: '127.0.0.1', port: Number(redisPort), maxRetriesPerRequest: 1 });
     redis.on('error', () => {});
@@ -221,7 +222,7 @@ const gate = setInterval(() => {
     assert.equal(await redis.get(`${buildNamespace}:${apiRecoveryId}:attempts`), '1');
     console.log('[PASS] Worker finished and acknowledged a build while the API was stopped');
 
-    start('api', apiEnv);
+    const recoveredApi = start('api', apiEnv);
     await waitForApi();
     const recovered = await until(async () => {
         const { deployment } = await (await request(recoveryRoute)).json();
@@ -290,10 +291,10 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
     const staticProject = (await (await request('/api/projects')).json()).projects
         .find(project => project.id === staticDeployment.project_id);
     assert.ok(staticProject);
-    async function waitForProductionBody(expected) {
+    async function waitForProductionBody(expected, port = proxyPort) {
         await until(async () => {
             try {
-                const response = await requestPreview(proxyPort, staticProject.slug);
+                const response = await requestPreview(port, staticProject.slug);
                 return response.status === 200 && response.body === expected;
             } catch { return false; }
         }, `production route serves ${expected}`, 15000);
@@ -331,7 +332,7 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
     appendFileSync(path.join(gitStaticFixture, 'build.js'), "fs.appendFileSync('dist/index.html', ' release B');\n");
     const releaseB = commitStatic('Release B');
     assert.notEqual(releaseA, releaseB);
-    start('builder', env);
+    const staticWorker = start('builder', env);
     const pinned = await waitForStatic(webhookId);
     assert.equal(pinned.commit_sha, releaseA);
     assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8',
@@ -349,11 +350,60 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
     assert.equal((await request(`/api/deployments/${next.id}/promote`, 'POST')).status, 200);
     const savedRoute = JSON.parse(await redis.hget('stratus:production-routes', staticProject.slug));
     assert.equal(savedRoute.aliasOf, next.id);
-    start('proxy', proxyEnv, proxyBinary);
+    const recoveredProxy = start('proxy', proxyEnv, proxyBinary);
     await waitForProductionBody(nextPreview.body);
     assert.equal((await request(`/api/projects/${staticProject.id}/rollback`, 'POST')).status, 200);
     await waitForProductionBody(staticPreview.body);
     console.log('[PASS] Production URL recovered release B after proxy restart and rolled back to release A');
+
+    assert.equal((await request(`/api/deployments/${next.id}/promote`, 'POST')).status, 200);
+    await waitForProductionBody(nextPreview.body);
+    await until(async () => (await redis.xpending('stream:build', 'builder-group'))[0] === 0, 'drained build queue');
+    await stop(staticWorker);
+    await stop(recoveredApi);
+    await stop(recoveredProxy);
+    const routeAtBackup = await redis.hget('stratus:production-routes', staticProject.slug);
+    const webhookResultKey = `${buildNamespace}:${webhookId}:result`;
+    const resultAtBackup = await redis.get(webhookResultKey);
+    assert.ok(resultAtBackup);
+    await redis.quit();
+    redis = undefined;
+    command(['stop', redisName]);
+
+    const redisBackup = path.join(testRoot, 'redis-backup');
+    const restoredData = path.join(testRoot, 'restored-data');
+    const restoredWorkspace = path.join(testRoot, 'restored-workspace');
+    mkdirSync(redisBackup);
+    command(['cp', `${redisName}:/data/.`, redisBackup]);
+    cpSync(env.DATA_DIR, restoredData, { recursive: true });
+    cpSync(workspace, restoredWorkspace, { recursive: true });
+    command(['create', '--name', restoredRedisName, '--label', `stratus.recovery.test=${runId}`,
+        '-p', '127.0.0.1::6379', 'redis:7-alpine', 'redis-server', '--appendonly', 'yes']);
+    command(['cp', `${redisBackup}${path.sep}.`, `${restoredRedisName}:/data`]);
+    command(['start', restoredRedisName]);
+    const restoredRedisPort = JSON.parse(command(['inspect', restoredRedisName]))[0].NetworkSettings.Ports['6379/tcp'][0].HostPort;
+    redis = new Redis({ host: '127.0.0.1', port: Number(restoredRedisPort), maxRetriesPerRequest: 1 });
+    redis.on('error', () => {});
+    await until(async () => { try { return await redis.ping() === 'PONG'; } catch { return false; } }, 'restored Redis');
+    assert.equal(await redis.hget('stratus:production-routes', staticProject.slug), routeAtBackup);
+    assert.equal(await redis.get(webhookResultKey), resultAtBackup);
+
+    const restoredProxyPort = await freePort();
+    const restoredEnv = { REDIS_PORT: restoredRedisPort, DATA_DIR: restoredData, WORKSPACE_DIR: restoredWorkspace };
+    start('proxy', { ...proxyEnv, ...restoredEnv, PORT: String(restoredProxyPort) }, proxyBinary);
+    await waitForProductionBody(nextPreview.body, restoredProxyPort);
+    assert.deepEqual(await requestPreview(restoredProxyPort, next.id), nextPreview);
+
+    apiPort = await freePort();
+    start('api', { ...apiEnv, ...restoredEnv, PORT: String(apiPort) });
+    await waitForApi();
+    const restoredProjectResponse = await request('/api/projects');
+    assert.equal(restoredProjectResponse.status, 200);
+    const restoredProject = (await restoredProjectResponse.json()).projects.find(project => project.id === staticProject.id);
+    assert.equal(restoredProject?.production_deployment_id, next.id);
+    assert.equal((await request(`/api/projects/${staticProject.id}/rollback`, 'POST')).status, 200);
+    await waitForProductionBody(staticPreview.body, restoredProxyPort);
+    console.log('[PASS] Restored SQLite, Redis AOF and static artifacts into fresh paths; production served B before API startup and rolled back to A');
 
     const report = { checkedAt: new Date().toISOString(), deploymentId, status: completed.status,
         attempts: 2, orphanRemoved: true, pending: 0, duplicatePreservedRuntime: true,
@@ -361,7 +411,8 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
         apiRecovery: { deploymentId: apiRecoveryId, status: recovered.status, previewStatus: preview.status, attempts: 1 },
         gitStatic: { deploymentId: staticId, status: staticDeployment.status, previewStatus: staticPreview.status },
         productionRouteRecovery: { project: staticProject.slug, promoted: next.id, rolledBackTo: staticId },
-        githubWebhook: { deploymentId: webhookId, builtSha: releaseA, newerSha: releaseB, attempts: 1 } };
+        githubWebhook: { deploymentId: webhookId, builtSha: releaseA, newerSha: releaseB, attempts: 1 },
+        staticRestore: { project: staticProject.slug, restored: next.id, rolledBackTo: staticId } };
     writeFileSync(path.join(root, 'services/data/build-recovery-report.json'), JSON.stringify(report, null, 2) + '\n');
 } catch (error) {
     console.error(logs.slice(-30).join(''));
@@ -376,10 +427,12 @@ fs.writeFileSync('dist/index.html', 'Stratus Git smoke on Node ' + process.versi
         }
     }
     if (redis) await redis.quit().catch(() => {});
-    try {
-        const info = JSON.parse(command(['inspect', redisName]))[0];
-        if (info.Config.Labels?.['stratus.recovery.test'] === runId) command(['rm', '-f', redisName]);
-    } catch { /* Test Redis may not have started. */ }
+    for (const name of [redisName, restoredRedisName]) {
+        try {
+            const info = JSON.parse(command(['inspect', name]))[0];
+            if (info.Config.Labels?.['stratus.recovery.test'] === runId) command(['rm', '-fv', name]);
+        } catch { /* Test Redis may not have started. */ }
+    }
     const parent = path.resolve(root, 'services/data');
     if (path.dirname(path.resolve(testRoot)) !== parent || !path.basename(testRoot).startsWith('recovery-')) {
         throw new Error('Unsafe test cleanup path');
