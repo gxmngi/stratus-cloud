@@ -64,7 +64,7 @@ jobs:
         if: matrix.service == 'builder'
         run: docker pull node:22-alpine
 
-      - name: Verify worker and API crash recovery with Docker
+      - name: Verify crash recovery and static restore with Docker
         if: matrix.service == 'builder'
         working-directory: .
         run: npm run test:recovery
