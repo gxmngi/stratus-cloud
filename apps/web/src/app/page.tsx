@@ -320,7 +320,7 @@ function Dashboard() {
       setNotice(
         err instanceof Error
           ? err.message
-          : `Failed to connect to API server at ${API_URL}`,
+          : "Failed to connect to the API server",
       );
     } finally {
       setIsDeploying(false);

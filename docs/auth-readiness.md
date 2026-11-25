@@ -99,16 +99,16 @@ password reset, MFA or social login is implemented in this milestone.
 
 All browser mutations require the exact `DASHBOARD_ORIGIN` header, including
 logout. Browsers supply Origin themselves; do not try to set it in frontend code.
-For command-line HTTP calls, supply it explicitly. Default configuration:
+For command-line HTTP calls, supply it explicitly. Local development uses
+`DASHBOARD_ORIGIN=http://localhost:3000` and falls back to the API on
+`http://localhost:4000` when the Dashboard is served over loopback HTTP.
 
-```text
-DASHBOARD_ORIGIN=http://localhost:3000
-NEXT_PUBLIC_API_URL=http://localhost:4000
-```
-
-`DASHBOARD_ORIGIN` has no trailing slash. `NEXT_PUBLIC_API_URL` is a web build-time
-setting. Compose loads the root `.env`; direct `npm start` uses shell environment
+`DASHBOARD_ORIGIN` has no trailing slash. The public HTTPS configuration uses
+the Dashboard's origin for HTTP requests and WebSocket upgrades. Set
+`NEXT_PUBLIC_API_URL` at build time if your Dashboard uses a separate API origin.
+Compose loads the root `.env`. Direct `npm start` uses shell environment
 variables and does not automatically load the root `.env`.
+[Public HTTPS configuration](linux-compose-install.md#enable-public-https)
 
 ### Session behavior in the UI
 

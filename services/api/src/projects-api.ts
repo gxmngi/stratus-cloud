@@ -5,6 +5,7 @@ import { getDeploymentMetrics } from './telemetry';
 import { teardownDeployment } from './teardown';
 import { requireSession, requireTrustedOrigin } from './access';
 import { getOwnedProject, getOwnedDeployment, listOwnedProjects, listOwnedDeployments, getOrCreateOwnedProject } from './ownership';
+import { createDeploymentUrl } from './deployment-url';
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_ENV_VARS = 100;
@@ -47,6 +48,7 @@ export function createProjectRouter(options: {
     workspaceDir: string;
     dashboardOrigin: string;
     port: number | string;
+    baseDomain?: string;
     newDeploymentId: () => string;
     teardown?: typeof teardownDeployment;
     buildsEnabled?: boolean;
@@ -56,6 +58,11 @@ export function createProjectRouter(options: {
     const teardown = options.teardown || teardownDeployment;
     const { publisher: redisPublisher, workspaceDir: WORKSPACE_DIR, dashboardOrigin, port: PORT,
         newDeploymentId, syncProductionRoute } = options;
+    const deploymentUrl = createDeploymentUrl(options.baseDomain);
+    const logOrigin = options.baseDomain?.trim() ? dashboardOrigin.replace(/^http/, 'ws') : `ws://localhost:${PORT}`;
+    function withDeploymentUrl(deployment: DeploymentRecord) {
+        return deployment.live_url === 'about:blank' ? deployment : { ...deployment, live_url: deploymentUrl(deployment.id) };
+    }
     // Health check endpoint
     router.get('/health', (req: Request, res: Response) => {
         res.json({ status: 'ok', service: 'stratus-api', timestamp: new Date().toISOString() });
@@ -82,10 +89,10 @@ export function createProjectRouter(options: {
             const proj = d.project_id ? projectMap.get(d.project_id) : undefined;
             const isProd = proj ? proj.production_deployment_id === d.id : false;
             return {
-                ...d,
+                ...withDeploymentUrl(d),
                 project_slug: proj?.slug || null,
                 is_production: isProd,
-                production_url: proj?.slug ? `http://${proj.slug}.localhost:8000` : null,
+                production_url: proj?.slug ? deploymentUrl(proj.slug) : null,
                 can_rollback: isProd ? Boolean(proj?.previous_production_deployment_id) : false,
                 previous_production_deployment_id: proj?.previous_production_deployment_id || null,
             };
@@ -133,7 +140,7 @@ export function createProjectRouter(options: {
         dbService.setProjectProductionDeployment(project.id, deploymentId);
         await syncProductionRoute(project.slug, deployment);
 
-        const productionUrl = `http://${project.slug}.localhost:8000`;
+        const productionUrl = deploymentUrl(project.slug);
         res.json({
             success: true,
             message: `Production selection saved for deployment ${deploymentId}`,
@@ -141,7 +148,7 @@ export function createProjectRouter(options: {
             projectSlug: project.slug,
             productionUrl,
             deployment: {
-                ...deployment,
+                ...withDeploymentUrl(deployment),
                 is_production: true,
                 production_url: productionUrl,
             },
@@ -168,7 +175,7 @@ export function createProjectRouter(options: {
         dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
         console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
 
-        const productionUrl = `http://${project.slug}.localhost:8000`;
+        const productionUrl = deploymentUrl(project.slug);
         res.json({
             success: true,
             message: rollbackMsg,
@@ -178,7 +185,7 @@ export function createProjectRouter(options: {
             previousDeploymentId: result.previousDeploymentId,
             productionUrl,
             deployment: {
-                ...result.restoredDeployment,
+                ...withDeploymentUrl(result.restoredDeployment),
                 is_production: true,
                 production_url: productionUrl,
             },
@@ -205,7 +212,7 @@ export function createProjectRouter(options: {
         dbService.appendLog(result.restoredDeployment.id, rollbackMsg);
         console.log(`[ROLLBACK] Project "${project.slug}": ${rollbackMsg}`);
 
-        const productionUrl = `http://${project.slug}.localhost:8000`;
+        const productionUrl = deploymentUrl(project.slug);
         res.json({
             success: true,
             message: rollbackMsg,
@@ -215,7 +222,7 @@ export function createProjectRouter(options: {
             previousDeploymentId: result.previousDeploymentId,
             productionUrl,
             deployment: {
-                ...result.restoredDeployment,
+                ...withDeploymentUrl(result.restoredDeployment),
                 is_production: true,
                 production_url: productionUrl,
             },
@@ -229,7 +236,7 @@ export function createProjectRouter(options: {
             res.status(404).json({ error: 'Deployment not found' });
             return;
         }
-        res.json({ deployment });
+        res.json({ deployment: withDeploymentUrl(deployment) });
     });
 
     // ดึงประวัติ Logs ย้อนหลังของ Deployment
@@ -291,7 +298,7 @@ export function createProjectRouter(options: {
             return;
         }
         const deploymentId = newDeploymentId();
-        const liveUrl = `http://${deploymentId}.localhost:8000`;
+        const liveUrl = deploymentUrl(deploymentId);
 
         console.log(`[API] Received deployment request for ${gitUrl} -> ID: ${deploymentId} (${Object.keys(envResult.value).length} env vars)`);
 
@@ -328,7 +335,7 @@ export function createProjectRouter(options: {
                 deploymentId,
                 status: 'QUEUED',
                 liveUrl,
-                logStreamUrl: `ws://localhost:${PORT}/api/logs?deploymentId=${deploymentId}`,
+                logStreamUrl: `${logOrigin}/api/logs?deploymentId=${encodeURIComponent(deploymentId)}`,
             });
         } catch (err) {
             const errorMsg = err instanceof Error ? err.message : String(err);

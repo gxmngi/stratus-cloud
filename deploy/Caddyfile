@@ -1,0 +1,21 @@
+{
+	admin off
+}
+
+{$STRATUS_DASHBOARD_HOST} {
+	tls /tls/fullchain.pem /tls/privkey.pem
+	@api path /api /api/*
+	handle @api {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+*.{$BASE_DOMAIN} {
+	tls /tls/fullchain.pem /tls/privkey.pem
+	@internal path /_internal/*
+	respond @internal 404
+	reverse_proxy proxy:8000
+}

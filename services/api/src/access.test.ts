@@ -13,8 +13,10 @@ import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
 import { githubWebhookHandler } from './github';
 import { createHmac } from 'node:crypto';
+import { createDeploymentUrl } from './deployment-url';
 
-const origin = 'http://localhost:3000';
+const origin = 'https://dashboard.example.test';
+const baseDomain = 'apps.example.test';
 const webhookSecret = 'test-webhook-secret';
 const webhookCommit = 'a'.repeat(40);
 
@@ -81,10 +83,10 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             status: 'READY', live_url: 'http://legacy-dep.localhost:8000', created_at: 1 });
         const app = express();
         app.post(['/api/webhooks/github', '/api/webhooks/github/:projectId'], express.raw({ type: 'application/json' }),
-            githubWebhookHandler(publisher, () => `dep-webhook-${++webhookId}`));
+            githubWebhookHandler(publisher, () => `dep-webhook-${++webhookId}`, createDeploymentUrl(baseDomain)));
         app.use(express.json());
         app.use('/api', createProjectRouter({
-            publisher, dashboardOrigin: origin, workspaceDir: process.env.TEST_WORKSPACE_DIR!, port: 4000,
+            publisher, dashboardOrigin: origin, workspaceDir: process.env.TEST_WORKSPACE_DIR!, port: 4000, baseDomain,
             newDeploymentId: () => `new-dep-${calls.length}`,
             syncProductionRoute: async () => { calls.push('route'); },
             teardown: async () => { calls.push('teardown'); return {
@@ -140,7 +142,12 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         assert.deepEqual(projects.projects.map((p: { id: string }) => p.id), [projectId]);
         const deployments = await (await request('/api/deployments', alice)).json();
         assert.equal(deployments.deployments.length, 2);
-        assert.equal((await request('/api/deployments/owned-dep', alice)).status, 200);
+        assert.equal(deployments.deployments.find((deployment: { id: string }) => deployment.id === 'owned-dep').live_url,
+            'https://owned-dep.apps.example.test');
+        assert.equal(deployments.deployments[0].production_url, 'https://alice.apps.example.test');
+        const detail = await request('/api/deployments/owned-dep', alice);
+        assert.equal(detail.status, 200);
+        assert.equal((await detail.json()).deployment.live_url, 'https://owned-dep.apps.example.test');
         assert.deepEqual(await (await request('/api/deployments/owned-dep/logs', alice)).json(), { logs: ['private build log'] });
         assert.equal((await request('/api/deployments/owned-dep/stats', alice)).status, 200);
         assert.equal((await request('/api/deployments/legacy-dep', alice)).status, 404);
@@ -152,9 +159,13 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     });
 
     test('owner can promote, rollback via both routes and delete a preview', async () => {
-        assert.equal((await request('/api/deployments/previous-dep/promote', alice, 'POST', {})).status, 200);
+        const promoted = await request('/api/deployments/previous-dep/promote', alice, 'POST', {});
+        assert.equal(promoted.status, 200);
+        assert.equal((await promoted.json()).productionUrl, 'https://alice.apps.example.test');
         assert.equal((await request('/api/deployments/owned-dep/promote', alice, 'POST', {})).status, 200);
-        assert.equal((await request(`/api/projects/${projectId}/rollback`, alice, 'POST', {})).status, 200);
+        const rollback = await request(`/api/projects/${projectId}/rollback`, alice, 'POST', {});
+        assert.equal(rollback.status, 200);
+        assert.equal((await rollback.json()).deployment.live_url, 'https://previous-dep.apps.example.test');
         assert.equal(dbService.getProject(projectId)?.production_deployment_id, 'previous-dep');
         assert.equal((await request('/api/deployments/owned-dep/rollback', alice, 'POST', {})).status, 200);
         assert.equal(dbService.getProject(projectId)?.production_deployment_id, 'owned-dep');
@@ -167,6 +178,9 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             gitUrl: 'https://github.com/example/bob.git', owner_id: 'alice',
         });
         assert.equal(deployed.status, 202);
+        const admission = await deployed.json();
+        assert.equal(admission.liveUrl, `https://${admission.deploymentId}.apps.example.test`);
+        assert.equal(admission.logStreamUrl, `wss://dashboard.example.test/api/logs?deploymentId=${admission.deploymentId}`);
         const project = db.prepare('SELECT owner_id FROM projects WHERE git_url = ?')
             .get('https://github.com/example/bob.git') as { owner_id: string };
         assert.equal(project.owner_id, 'bob');
@@ -258,6 +272,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             assert.equal(matched.status, 202);
             const result = await matched.json();
             assert.equal(dbService.getDeployment(result.deploymentId)?.project_id, projectId);
+            assert.equal(dbService.getDeployment(result.deploymentId)?.live_url, `https://${result.deploymentId}.apps.example.test`);
             const wrong = await fetch(base + '/api/webhooks/github/missing', { method: 'POST', headers, body });
             assert.equal((await wrong.json()).status, 'ignored');
             const unsigned = await fetch(base + `/api/webhooks/github/${projectId}`, {

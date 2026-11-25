@@ -1,0 +1,38 @@
+services:
+  api:
+    ports: !reset []
+    environment:
+      DASHBOARD_ORIGIN: https://${STRATUS_DASHBOARD_HOST:?Set STRATUS_DASHBOARD_HOST}
+      BASE_DOMAIN: ${BASE_DOMAIN:?Set BASE_DOMAIN}
+      TRUST_PROXY_HOPS: "1"
+      WORKSPACE_DIR: /workspace
+    volumes:
+      - ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}:/workspace
+
+  proxy:
+    ports: !reset []
+    environment:
+      TLS_DOMAINS: ""
+
+  web:
+    ports: !reset []
+
+  ingress:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      STRATUS_DASHBOARD_HOST: ${STRATUS_DASHBOARD_HOST:?Set STRATUS_DASHBOARD_HOST}
+      BASE_DOMAIN: ${BASE_DOMAIN:?Set BASE_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${STRATUS_TLS_CERTS_DIR:?Set STRATUS_TLS_CERTS_DIR}:/tls:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      proxy:
+        condition: service_healthy
+      web:
+        condition: service_started
