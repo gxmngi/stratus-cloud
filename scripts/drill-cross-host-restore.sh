@@ -11,7 +11,8 @@ export BASE_DOMAIN=apps.stratus-restore.test
 export STRATUS_RUNTIME_NETWORK=stratus-drill-runtime
 export GITHUB_WEBHOOK_SECRET=
 : "${STRATUS_IMAGE_TAG:?Set the published Stratus image tag}"
-mkdir -p "$backup" "$STRATUS_TLS_CERTS_DIR" "$STRATUS_WORKSPACE_HOST_PATH"
+mkdir -p "$backup" "$STRATUS_TLS_CERTS_DIR"
+install -d -m 0755 "$STRATUS_WORKSPACE_HOST_PATH"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
     -subj "/CN=$STRATUS_DASHBOARD_HOST" \
     -addext "subjectAltName=DNS:$STRATUS_DASHBOARD_HOST,DNS:*.$BASE_DOMAIN" \
@@ -73,6 +74,7 @@ check_static() {
         if [[ $(preview "$name" release.txt) == "$expected" ]]; then return 0; fi
         sleep 1
     done
+    echo "Static route $name did not serve $expected" >&2
     return 1
 }
 
@@ -83,6 +85,7 @@ check_dynamic() {
             '.status == "ok" and .deploymentId == $id' >/dev/null; then return 0; fi
         sleep 1
     done
+    echo "Dynamic route $name did not serve deployment $expected" >&2
     return 1
 }
 
