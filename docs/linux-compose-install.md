@@ -33,6 +33,20 @@ and dashboard. Keep the image tag and webhook secret in your deployment
 environment so Compose reuses them when it recreates a container. Keep the
 secret out of source control.
 
+## Cache npm downloads
+
+Set `STRATUS_NPM_CACHE=1` in the Compose environment and recreate the builder
+to reuse npm downloads for automatic builds with a `package-lock.json`. Each
+project has its own Docker volume. Builds with a custom command, an `.npmrc`,
+injected environment variables, or another supported package manager use the
+usual install path. Every deployment still installs into a fresh workspace.
+
+Enable this for installations where consecutive builds of a project can trust
+the files written by earlier builds. Volumes survive builder restarts and are
+local to the Docker host. Use `docker volume ls --filter name=stratus-npm-v1-`
+to find them. When disk space is needed, remove individual unused cache volumes
+with `docker volume rm VOLUME_NAME`. The next build downloads packages again.
+
 ## Enable public HTTPS
 
 Choose a dashboard hostname such as `console.example.com` and a separate

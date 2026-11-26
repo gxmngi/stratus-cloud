@@ -318,6 +318,7 @@ export function createProjectRouter(options: {
 
             const jobPayload = {
                 deploymentId,
+                projectId: project.id,
                 gitUrl,
                 buildCommand,
                 env: envResult.value,

@@ -31,6 +31,7 @@ redisPublisher.on('error', (err: Error) => {
 export interface BuildOptions {
     gitUrl: string;
     deploymentId: string;
+    projectId?: string;
     trigger?: 'manual' | 'webhook';
     commitSha?: string;
     buildCommand?: string;
@@ -54,7 +55,9 @@ export interface BuildResult {
 /**
  * วิเคราะห์โครงสร้างโปรเจกต์เพื่อเลือก Package Manager อัตโนมัติแบบ Vercel
  */
-function resolveBuildCommand(codeDir: string, customCommand?: string): string {
+const NPM_CACHE_PATH = '/var/cache/stratus-npm';
+
+function resolveBuildCommand(codeDir: string, customCommand?: string, npmCacheVolume?: string): string {
     if (customCommand) {
         return customCommand;
     }
@@ -79,7 +82,10 @@ function resolveBuildCommand(codeDir: string, customCommand?: string): string {
     if (fs.existsSync(path.join(codeDir, 'bun.lockb'))) {
         return hasBuildScript ? 'npx --yes bun install && npx --yes bun run build' : 'npx --yes bun install';
     }
-    return hasBuildScript ? 'npm install && npm run build' : 'npm install';
+    const install = npmCacheVolume
+        ? `npm install --cache ${NPM_CACHE_PATH} --prefer-offline`
+        : 'npm install';
+    return hasBuildScript ? `${install} && npm run build` : install;
 }
 
 /**
@@ -209,13 +215,21 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
     }
 
     // Step 2: Auto-detect Build Command
-    const effectiveBuildCommand = resolveBuildCommand(codeDir, customBuildCommand);
+    const { formattedEnv, secretValues } = formatBuildEnvironment(options.env);
+    const projectId = options.projectId;
+    const npmCacheVolume = process.env.STRATUS_NPM_CACHE === '1' &&
+        typeof projectId === 'string' && /^proj-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(projectId) &&
+        !customBuildCommand && formattedEnv.length === 0 &&
+        fs.existsSync(path.join(codeDir, 'package-lock.json')) &&
+        !['.npmrc', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb'].some(file => fs.existsSync(path.join(codeDir, file)))
+        ? `stratus-npm-v1-${projectId}`
+        : undefined;
+    const effectiveBuildCommand = resolveBuildCommand(codeDir, customBuildCommand, npmCacheVolume);
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Resolved build command: "${effectiveBuildCommand}"`);
 
     // Step 3: Initialize Docker Sandbox Container
     const hostMountPath = hostCodeDir.replace(/\\/g, '/');
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Provisioning sandbox container (image: ${NODE_IMAGE})`);
-    const { formattedEnv, secretValues } = formatBuildEnvironment(options.env);
     // ตั้งค่า Masker สำหรับ Deployment นี้: ค่า Secret จะถูกแทนที่ด้วย *** ก่อนส่งไปยัง Log/Redis
     setSecretMasker(deploymentId, secretValues);
     if (formattedEnv.length > 0) {
@@ -233,6 +247,9 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             Env: formattedEnv, // <-- ฉีด Environment Variables เข้าไปใน Container
             HostConfig: {
                 Binds: [`${hostMountPath}:/app`],
+                ...(npmCacheVolume ? { Mounts: [{
+                    Type: 'volume', Source: npmCacheVolume, Target: NPM_CACHE_PATH,
+                }] } : {}),
                 Memory: 1024 * 1024 * 1024, // 1GB memory limit
                 MemorySwap: 1024 * 1024 * 1024, // Disallow unbounded swap
                 CpuQuota: 100000,          // 1.0 CPU core limit
