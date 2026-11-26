@@ -94,6 +94,7 @@ check_dynamic() {
 
 static_fixture=/fixtures/demo-app
 dynamic_fixture=/fixtures/demo-server
+boot_id=$(cat /proc/sys/kernel/random/boot_id)
 case "${1:-}" in
     source)
         docker pull node:22-alpine
@@ -128,10 +129,11 @@ case "${1:-}" in
         "${dc[@]}" run --rm --no-deps -T redis tar -cf - -C /data . > "$backup/redis.tar"
         sudo tar -cf - -C "$STRATUS_WORKSPACE_HOST_PATH" . > "$backup/workspace.tar"
         docker image save "$image" -o "$backup/runtime.tar"
-        jq -cn --arg host "$(docker info --format '{{.ID}}')" --arg image "$image" \
+        source_volume=$(docker volume create "stratus-drill-source-$boot_id")
+        jq -cn --arg boot "$boot_id" --arg volume "$source_volume" --arg image "$image" \
             --arg sa "$static_a" --arg sb "$static_b" --arg da "$dynamic_a" --arg db "$dynamic_b" \
             --argjson static "$static_project" --argjson dynamic "$dynamic_project" \
-            '{host:$host,image:$image,static_a:$sa,static_b:$sb,dynamic_a:$da,dynamic_b:$db,
+            '{source_boot_id:$boot,source_volume:$volume,image:$image,static_a:$sa,static_b:$sb,dynamic_a:$da,dynamic_b:$db,
               static_project:($static|{id,slug}),dynamic_project:($dynamic|{id,slug})}' > "$backup/releases.json"
         (cd "$backup" && sha256sum sqlite.tar redis.tar workspace.tar runtime.tar releases.json > SHA256SUMS)
         echo 'Verified both source production releases and archived the synthetic data.'
@@ -139,7 +141,15 @@ case "${1:-}" in
     destination)
         (cd "$backup" && sha256sum -c SHA256SUMS)
         metadata="$backup/releases.json"
-        test "$(docker info --format '{{.ID}}')" != "$(jq -er '.host' "$metadata")"
+        if [[ "$boot_id" == "$(jq -er '.source_boot_id' "$metadata")" ]]; then
+            echo 'The source and destination share the same Linux boot.' >&2
+            exit 1
+        fi
+        source_volume=$(jq -er '.source_volume' "$metadata")
+        if docker volume ls --format '{{.Name}}' | grep -Fx "$source_volume" >/dev/null; then
+            echo 'The destination can see a Docker volume created only on the source.' >&2
+            exit 1
+        fi
         test -z "$(find "$STRATUS_WORKSPACE_HOST_PATH" -mindepth 1 -maxdepth 1 -print -quit)"
         for entry in api:sqlite redis:redis; do
             "${dc[@]}" run --rm --no-deps -T "${entry%:*}" \
