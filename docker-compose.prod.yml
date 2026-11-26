@@ -44,6 +44,7 @@ services:
       REDIS_PORT: "6379"
       WORKSPACE_DIR: /workspace
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
+      STRATUS_NPM_CACHE: ${STRATUS_NPM_CACHE:-0}
       HOST_WORKSPACE_PATH: ${STRATUS_WORKSPACE_HOST_PATH:-/var/lib/stratus/workspace}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock

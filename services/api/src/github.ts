@@ -19,6 +19,7 @@ const enqueueWebhook = `
 
 interface WebhookJob {
     deploymentId: string;
+    projectId?: string;
     gitUrl: string;
     env: Record<string, never>;
     trigger: 'webhook';
@@ -29,12 +30,12 @@ interface WebhookJob {
 }
 
 const reserveDelivery = db.transaction((project: ProjectRecord, deliveryId: string,
-    build: Omit<WebhookJob, 'deploymentId'>, newDeploymentId: () => string, deploymentUrl: (id: string) => string) => {
+    build: Omit<WebhookJob, 'deploymentId' | 'projectId'>, newDeploymentId: () => string, deploymentUrl: (id: string) => string) => {
     const existing = db.prepare('SELECT job_json FROM github_deliveries WHERE project_id = ? AND delivery_id = ?')
         .get(project.id, deliveryId) as { job_json: string } | undefined;
     if (existing) return JSON.parse(existing.job_json) as WebhookJob;
 
-    const job = { deploymentId: newDeploymentId(), ...build };
+    const job = { deploymentId: newDeploymentId(), projectId: project.id, ...build };
     dbService.createDeployment({
         id: job.deploymentId,
         project_id: project.id,

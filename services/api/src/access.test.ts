@@ -39,10 +39,15 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
     let enqueueFailure: 'before' | 'after' | undefined;
     const calls: string[] = [];
     const webhookReceipts = new Map<string, string>();
-    const queuedWebhookJobs: { deploymentId: string; commitSha: string }[] = [];
+    const queuedWebhookJobs: { deploymentId: string; projectId: string; commitSha: string }[] = [];
+    const queuedManualJobs: { deploymentId: string; projectId: string }[] = [];
     const subscribers: EventEmitter[] = [];
     const publisher = {
-        xadd: async () => { calls.push('queue'); return '1-0'; },
+        xadd: async (_stream: string, _id: string, _field: string, payload: string) => {
+            queuedManualJobs.push(JSON.parse(payload));
+            calls.push('queue');
+            return '1-0';
+        },
         eval: async (_script: string, _keyCount: number, _stream: string, key: string, payload: string) => {
             const failure = enqueueFailure;
             enqueueFailure = undefined;
@@ -187,9 +192,14 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         const before = calls.length;
         assert.equal((await request('/api/deploy', bob, 'POST', { gitUrl: 'https://github.com/example/legacy.git' })).status, 404);
         assert.equal(calls.length, before);
-        const separate = await request('/api/deploy', bob, 'POST', { gitUrl: 'https://github.com/example/alice.git' });
+        const separate = await request('/api/deploy', bob, 'POST', {
+            gitUrl: 'https://github.com/example/alice.git', projectId,
+        });
         assert.equal(separate.status, 202);
         const result = await separate.json();
+        const separateProjectId = dbService.getDeployment(result.deploymentId)?.project_id;
+        assert.ok(separateProjectId && separateProjectId !== projectId);
+        assert.equal(queuedManualJobs.at(-1)?.projectId, separateProjectId);
         assert.equal((await request(`/api/deployments/${result.deploymentId}`, alice)).status, 404);
     });
 
@@ -321,6 +331,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
             const jobs = queuedWebhookJobs.slice(before);
             assert.equal(jobs.length, 1);
             assert.equal(jobs[0].deploymentId, deploymentId);
+            assert.equal(jobs[0].projectId, projectId);
             assert.equal(jobs[0].commitSha, webhookCommit);
         } finally {
             if (oldSecret === undefined) delete process.env.GITHUB_WEBHOOK_SECRET;
