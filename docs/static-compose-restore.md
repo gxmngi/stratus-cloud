@@ -67,7 +67,7 @@ set -euo pipefail
 dc=(docker compose --project-name stratus-restore -f docker-compose.prod.yml -f docker-compose.https.yml)
 workspace=${STRATUS_WORKSPACE_HOST_PATH:?Set STRATUS_WORKSPACE_HOST_PATH to a fresh directory}
 ( cd "$backup" && sha256sum -c SHA256SUMS )
-sudo mkdir -p "$workspace"
+sudo install -d -m 0755 "$workspace"
 test -z "$(sudo find "$workspace" -mindepth 1 -maxdepth 1 -print -quit)"
 "${dc[@]}" run --rm --no-deps -T api sh -ec 'test -z "$(ls -A /data)"; tar -xf - -C /data' < "$backup/sqlite.tar"
 "${dc[@]}" run --rm --no-deps -T redis sh -ec 'test -z "$(ls -A /data)"; tar -xf - -C /data' < "$backup/redis.tar"
@@ -80,3 +80,6 @@ destination IP before switching DNS. Confirm the response bodies match the
 saved releases. Sign in to the restored dashboard, check the selected production
 deployment, and verify rollback on a test project. Keep the backup until the
 destination serves the expected release through its public URL.
+
+The proxy runs as an unprivileged user. Keep the workspace mount root traversable
+by the proxy and the deployed static artifacts readable inside the container.
