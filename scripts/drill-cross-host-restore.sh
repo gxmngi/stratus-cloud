@@ -10,7 +10,10 @@ export STRATUS_DASHBOARD_HOST=console.stratus-restore.test
 export BASE_DOMAIN=apps.stratus-restore.test
 export STRATUS_RUNTIME_NETWORK=stratus-drill-runtime
 export GITHUB_WEBHOOK_SECRET=
-: "${STRATUS_IMAGE_TAG:?Set the published Stratus image tag}"
+if [[ ! ${STRATUS_IMAGE_TAG:-} =~ ^[0-9a-f]{40}$ ]]; then
+    echo 'Set STRATUS_IMAGE_TAG to a published Stratus commit SHA.' >&2
+    exit 2
+fi
 mkdir -p "$backup" "$STRATUS_TLS_CERTS_DIR"
 install -d -m 0755 "$STRATUS_WORKSPACE_HOST_PATH"
 openssl req -x509 -newkey rsa:2048 -nodes -days 1 \

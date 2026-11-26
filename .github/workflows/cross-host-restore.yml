@@ -2,6 +2,11 @@ name: Cross-host restore drill
 
 on:
   workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Full image commit SHA published to GitHub Container Registry
+        type: string
+        required: false
   push:
     branches: [codex/cross-host-restore-drill]
 
@@ -9,7 +14,7 @@ permissions:
   contents: read
 
 env:
-  STRATUS_IMAGE_TAG: f1cd1dac250f686151cf848c03b01004526adddc
+  STRATUS_IMAGE_TAG: ${{ inputs.image_tag || 'b88992d4d46293918627189976cf2b28058eb62d' }}
 
 jobs:
   source:
