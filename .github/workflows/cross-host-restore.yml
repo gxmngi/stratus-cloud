@@ -1,0 +1,40 @@
+name: Cross-host restore drill
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [codex/cross-host-restore-drill]
+
+permissions:
+  contents: read
+
+env:
+  STRATUS_IMAGE_TAG: f1cd1dac250f686151cf848c03b01004526adddc
+
+jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy fixtures and take a cold backup
+        run: bash scripts/drill-cross-host-restore.sh source
+      - uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-stratus-backup
+          path: ${{ runner.temp }}/stratus-drill/backup/
+          if-no-files-found: error
+          retention-days: 1
+
+  destination:
+    needs: source
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: synthetic-stratus-backup
+          path: ${{ runner.temp }}/stratus-drill/backup/
+      - name: Restore both fixture projects on a fresh Docker host
+        run: bash scripts/drill-cross-host-restore.sh destination
