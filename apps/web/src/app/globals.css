@@ -423,6 +423,7 @@ svg {
 
 .composer-options {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-start;
   justify-content: space-between;
   gap: 4px 16px;
@@ -506,6 +507,68 @@ svg {
 
 .environment-fields button:hover {
   background: #23384c;
+}
+
+.repository-check {
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid #536276;
+  border-radius: 10px;
+  background: #101b2b;
+  color: #e6edf7;
+  font-size: 13px;
+}
+
+.repository-check p {
+  margin: 0;
+}
+
+.repository-check p svg {
+  display: inline-block;
+  margin-right: 5px;
+}
+
+.repository-check button {
+  margin-left: 9px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.repository-check dl {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+}
+
+.repository-check dl > div {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px;
+}
+
+.repository-check dd {
+  font-family: var(--font-geist-mono), monospace;
+  overflow-wrap: anywhere;
+}
+
+.build-settings label {
+  display: grid;
+  gap: 4px;
+  margin-top: 9px;
+  font-size: 13px;
+}
+
+.build-settings input {
+  min-height: 40px;
+  padding-inline: 9px;
+  border: 1px solid #536276;
+  border-radius: 6px;
+  background: #18273a;
+  color: #f9fbff;
+}
+
+.build-settings input::placeholder {
+  color: #afc1d1;
 }
 
 /* Deployment activity and inspector */

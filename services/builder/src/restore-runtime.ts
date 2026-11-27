@@ -6,7 +6,7 @@ import { waitForContainerReadiness } from './health';
 import { maskSecrets } from './mask';
 import { createRuntimeContainer, formatBuildEnvironment, resolveStartCommand, RUNTIME_PORT } from './runtime';
 import { parseJob } from './worker';
-import { resolveDeploymentWorkspace } from './workspace';
+import { resolveBuildDirectory, resolveDeploymentWorkspace } from './workspace';
 
 export async function findRestoreJob(redis: Pick<Redis, 'xrevrange'>, stream: string, deploymentId: string) {
     let cursor = '+';
@@ -62,9 +62,11 @@ async function restoreRuntime(deploymentId: string, image: string) {
             throw new Error('The restored build journal lacks a successful private runtime result');
         }
         const job = await findRestoreJob(redis, process.env.BUILD_STREAM || 'stream:build', deploymentId);
+        const app = resolveBuildDirectory(codeDir, job.rootDirectory);
+        if (!app) throw new Error('The restored project folder is unavailable');
         const formatted = formatBuildEnvironment(job.env);
         secretValues = formatted.secretValues;
-        const startCommand = resolveStartCommand(codeDir, job.startCommand);
+        const startCommand = resolveStartCommand(app.directory, job.startCommand);
         if (!startCommand) throw new Error('The restored workspace has no runtime start command');
 
         const containerName = `stratus-${deploymentId}`;
@@ -77,12 +79,13 @@ async function restoreRuntime(deploymentId: string, image: string) {
             info.Config.Labels?.['stratus.role'] !== 'runtime' || info.Image !== image ||
             info.HostConfig.NetworkMode !== network || Object.keys(info.NetworkSettings.Networks).some(name => name !== network) ||
             !info.HostConfig.Binds?.includes(`${hostCodeDir}:/app`) ||
+            info.Config.WorkingDir !== app.workingDirectory ||
             JSON.stringify(info.Config.Cmd) !== JSON.stringify(['sh', '-c', startCommand]) ||
             info.HostConfig.PublishAllPorts || Object.keys(info.HostConfig.PortBindings ?? {}).length > 0)) {
             throw new Error('A container with that name has a different runtime configuration');
         }
         if (!info) created = await createRuntimeContainer(docker, { deploymentId, image, startCommand,
-            formattedEnv: formatted.formattedEnv, hostCodeDir, port: RUNTIME_PORT, network });
+            formattedEnv: formatted.formattedEnv, hostCodeDir, port: RUNTIME_PORT, network, workingDirectory: app.workingDirectory });
         const container = created ?? existing;
         if (!info?.State.Running) await container.start().catch(error => { if (error.statusCode !== 304) throw error; });
         const probe = await waitForContainerReadiness(container, RUNTIME_PORT, { host: containerName });

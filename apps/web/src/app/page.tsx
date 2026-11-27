@@ -73,6 +73,18 @@ interface DeploymentItem {
   completed_at?: number | null;
 }
 
+interface RepositoryFinding {
+  framework: string;
+  buildCommand: string | null;
+  outputDirectory: string | null;
+  message?: string;
+}
+
+type RepositoryCheck = { key: string } & (
+  | { finding: RepositoryFinding; error?: never; blocked?: never }
+  | { error: string; blocked: boolean; finding?: never }
+);
+
 export default function Home() {
   const { user } = useAuth();
   return (
@@ -109,6 +121,21 @@ function Dashboard() {
     { action: "delete-project"; projectId: string; projectName: string } | null
   >(null);
   const [gitUrl, setGitUrl] = useState("");
+  const [showBuildSettings, setShowBuildSettings] = useState(false);
+  const [rootDirectory, setRootDirectory] = useState("");
+  const [buildCommand, setBuildCommand] = useState("");
+  const [outputDirectory, setOutputDirectory] = useState("");
+  const [repositoryCheck, setRepositoryCheck] = useState<RepositoryCheck | null>(null);
+  const [checkAttempt, setCheckAttempt] = useState(0);
+  const source = gitUrl.trim();
+  const projectRoot = rootDirectory.trim();
+  const isGitHub = /^https:\/\/github\.com\/[\w-]+\/[\w.-]+\/?$/i.test(source);
+  const checkKey = JSON.stringify([source, projectRoot, checkAttempt]);
+  const currentCheck = repositoryCheck?.key === checkKey ? repositoryCheck : null;
+  const finding = currentCheck?.finding;
+  const needsCheck = isGitHub && !currentCheck;
+  const cannotDeploy = needsCheck || currentCheck?.blocked ||
+    Boolean(finding?.message && (finding.framework !== "Unknown" || !buildCommand.trim()));
   const [isDeploying, setIsDeploying] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [isRollingBack, setIsRollingBack] = useState(false);
@@ -122,6 +149,45 @@ function Dashboard() {
   const [envVars, setEnvVars] = useState<Array<{ key: string; value: string }>>(
     [{ key: "", value: "" }],
   );
+
+  useEffect(() => {
+    if (!isGitHub) return;
+    const controller = new AbortController();
+    const timer = setTimeout(async () => {
+      try {
+        const response = await apiFetch(`${API_URL}/api/deploy/preflight`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gitUrl: source, rootDirectory: projectRoot }),
+          signal: AbortSignal.any([controller.signal, AbortSignal.timeout(12000)]),
+        });
+        const data = await response.json();
+        if (controller.signal.aborted) return;
+        setRepositoryCheck(response.ok ? { key: checkKey, finding: data } : {
+          key: checkKey,
+          error: data.error || "Could not check this repository.",
+          blocked: response.status === 400 || response.status === 404,
+        });
+      } catch {
+        if (!controller.signal.aborted) {
+          setRepositoryCheck({ key: checkKey, error: "Could not check this repository.", blocked: false });
+        }
+      }
+    }, 450);
+    return () => {
+      clearTimeout(timer);
+      controller.abort();
+    };
+  }, [isGitHub, checkKey, source, projectRoot]);
+
+  function changeSource(value: string) {
+    setGitUrl(value);
+    if (value.trim() !== source) {
+      setRootDirectory("");
+      setBuildCommand("");
+      setOutputDirectory("");
+    }
+  }
 
   const handlePromote = async (deploymentId: string) => {
     setIsPromoting(true);
@@ -288,7 +354,7 @@ function Dashboard() {
 
   const handleDeploy = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!gitUrl.trim() || isDeploying) return;
+    if (!source || cannotDeploy || isDeploying) return;
 
     setIsDeploying(true);
     setNotice("");
@@ -307,7 +373,10 @@ function Dashboard() {
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          gitUrl: gitUrl.trim(),
+          gitUrl: source,
+          rootDirectory: projectRoot || undefined,
+          buildCommand: buildCommand.trim() || undefined,
+          outputDirectory: outputDirectory.trim() || undefined,
           env: Object.keys(envPayload).length > 0 ? envPayload : undefined,
         }),
       });
@@ -507,7 +576,7 @@ function Dashboard() {
               <input
                 id="git-repository"
                 value={gitUrl}
-                onChange={(e) => setGitUrl(e.target.value)}
+                onChange={(e) => changeSource(e.target.value)}
                 required
                 autoCapitalize="none"
                 spellCheck={false}
@@ -516,7 +585,7 @@ function Dashboard() {
               <button
                 className="button primary"
                 type="submit"
-                disabled={isDeploying || !gitUrl.trim()}
+                disabled={isDeploying || !source || Boolean(cannotDeploy)}
               >
                 {isDeploying ? (
                   <Loader2 size={15} className="auth-spin" />
@@ -531,17 +600,26 @@ function Dashboard() {
                 <span>Examples</span>
                 <button
                   type="button"
-                  onClick={() => setGitUrl("fixtures/demo-app")}
+                  onClick={() => changeSource("fixtures/demo-app")}
                 >
                   <Globe2 size={13} /> Static site
                 </button>
                 <button
                   type="button"
-                  onClick={() => setGitUrl("fixtures/demo-server")}
+                  onClick={() => changeSource("fixtures/demo-server")}
                 >
                   <Box size={13} /> Node.js server
                 </button>
               </div>
+              <button
+                type="button"
+                className="env-toggle"
+                aria-expanded={showBuildSettings}
+                aria-controls="build-settings"
+                onClick={() => setShowBuildSettings(!showBuildSettings)}
+              >
+                Build settings <ChevronDown size={14} />
+              </button>
               <button
                 type="button"
                 className="env-toggle"
@@ -552,6 +630,45 @@ function Dashboard() {
                 Environment variables <ChevronDown size={14} />
               </button>
             </div>
+            {isGitHub && (
+              <div className="repository-check" aria-live="polite">
+                {needsCheck ? (
+                  <p><Loader2 size={15} className="auth-spin" /> Checking repository…</p>
+                ) : finding ? (
+                  <>
+                    <p><strong>{finding.framework}</strong>{finding.message && <> · {finding.message}</>}</p>
+                    {!finding.message && (
+                      <dl>
+                        <div><dt>Build command</dt><dd>{buildCommand.trim() || finding.buildCommand}</dd></div>
+                        <div><dt>Output</dt><dd>{outputDirectory.trim() || finding.outputDirectory || "Auto-detected"}</dd></div>
+                      </dl>
+                    )}
+                  </>
+                ) : (
+                  <p>
+                    {currentCheck?.error}
+                    <button type="button" onClick={() => setCheckAttempt(value => value + 1)}>Retry</button>
+                  </p>
+                )}
+              </div>
+            )}
+            {showBuildSettings && (
+              <div id="build-settings" className="environment-fields build-settings">
+                <p>These settings apply to this deployment.</p>
+                <label>
+                  Project folder
+                  <input value={rootDirectory} onChange={e => setRootDirectory(e.target.value)} placeholder=". (repository root)" />
+                </label>
+                <label>
+                  Build command
+                  <input value={buildCommand} onChange={e => setBuildCommand(e.target.value)} placeholder={finding?.buildCommand || "Auto-detected"} />
+                </label>
+                <label>
+                  Output folder
+                  <input value={outputDirectory} onChange={e => setOutputDirectory(e.target.value)} placeholder={finding?.outputDirectory || "Auto-detected"} />
+                </label>
+              </div>
+            )}
             {showEnv && (
               <div id="environment-fields" className="environment-fields">
                 <p>

@@ -94,6 +94,36 @@ func TestMissingArtifactDoesNotConsumeProductionRevision(t *testing.T) {
 	}
 }
 
+func TestNestedArtifactSurvivesPreviewAndProductionRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	deployment := filepath.Join(workspace, "dep-web")
+	output := filepath.Join(deployment, "code", "apps", "web", "public-output")
+	if err := os.MkdirAll(output, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("custom output"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployment, "runtime.json"), []byte(`{"type":"static","artifactDir":"apps/web/public-output"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &ProxyHandler{workspaceBase: workspace, routes: make(map[string]*RouteEntry)}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-web","type":"static","revision":1}`, "project")
+	for _, host := range []string{"dep-web", "project"} {
+		response := httptest.NewRecorder()
+		proxy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://"+host+".localhost/", nil))
+		if response.Code != http.StatusOK || response.Body.String() != "custom output" {
+			t.Fatalf("%s did not serve the custom output: %d %q", host, response.Code, response.Body.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(deployment, "runtime.json"), []byte(`{"type":"static","artifactDir":"../code/apps/web/public-output"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if route := proxy.createStaticRouteEntry("bad", "dep-web"); route != nil {
+		t.Fatal("accepted an invalid artifact path")
+	}
+}
+
 func TestDeletedProductionAliasDoesNotRecoverFromStaleUpdates(t *testing.T) {
 	proxy := &ProxyHandler{workspaceBase: t.TempDir(), routes: make(map[string]*RouteEntry)}
 	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"revision":1}`, "project")

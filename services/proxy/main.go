@@ -270,8 +270,36 @@ func (p *ProxyHandler) SetStaticRouteFromTarget(subdomain string, targetSubdomai
 }
 
 func (p *ProxyHandler) createStaticRouteEntry(subdomain string, targetSubdomain string) *RouteEntry {
-	for _, candidate := range []string{"dist", "build", "out"} {
-		candidatePath := filepath.Join(p.workspaceBase, targetSubdomain, "code", candidate)
+	if !subdomainRegex.MatchString(targetSubdomain) {
+		return nil
+	}
+	workspace := filepath.Join(p.workspaceBase, targetSubdomain)
+	code := filepath.Join(workspace, "code")
+	candidates := []string{"dist", "build", "out"}
+	if data, err := os.ReadFile(filepath.Join(workspace, "runtime.json")); err == nil {
+		var meta struct {
+			Type        string `json:"type"`
+			ArtifactDir string `json:"artifactDir"`
+		}
+		if json.Unmarshal(data, &meta) == nil && meta.Type == "static" && meta.ArtifactDir != "" {
+			relative, err := filepath.Localize(meta.ArtifactDir)
+			if err != nil || relative == "." {
+				return nil
+			}
+			candidates = []string{relative}
+		}
+	}
+	for _, candidate := range candidates {
+		candidatePath := filepath.Join(code, candidate)
+		realCode, codeErr := filepath.EvalSymlinks(code)
+		realCandidate, candidateErr := filepath.EvalSymlinks(candidatePath)
+		if codeErr != nil || candidateErr != nil {
+			continue
+		}
+		relative, relErr := filepath.Rel(realCode, realCandidate)
+		if relErr != nil || relative == "." || !filepath.IsLocal(relative) {
+			continue
+		}
 		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
 			return &RouteEntry{
 				Subdomain: subdomain,
@@ -347,19 +375,9 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 					return entry
 				}
 			} else if aliasMeta.Type == "static" && aliasMeta.Target != "" {
-				candidates := []string{"dist", "build", "out"}
-				for _, candidate := range candidates {
-					candidatePath := filepath.Join(p.workspaceBase, aliasMeta.Target, "code", candidate)
-					if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
-						entry = &RouteEntry{
-							Subdomain: subdomain,
-							Type:      RouteTypeStatic,
-							DistDir:   candidatePath,
-							UpdatedAt: time.Now(),
-						}
-						p.routes[subdomain] = entry
-						return entry
-					}
+				if entry = p.createStaticRouteEntry(subdomain, aliasMeta.Target); entry != nil {
+					p.routes[subdomain] = entry
+					return entry
 				}
 			}
 		}
@@ -382,22 +400,10 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 	}
 
 	// 2. ตรวจสอบ Static Site Artifacts
-	candidates := []string{"dist", "build", "out"}
-	for _, candidate := range candidates {
-		candidatePath := filepath.Join(p.workspaceBase, subdomain, "code", candidate)
-		if stat, err := os.Stat(candidatePath); err == nil && stat.IsDir() {
-			entry = &RouteEntry{
-				Subdomain: subdomain,
-				Type:      RouteTypeStatic,
-				DistDir:   candidatePath,
-				UpdatedAt: time.Now(),
-			}
-			p.routes[subdomain] = entry
-			return entry
-		}
+	if entry = p.createStaticRouteEntry(subdomain, subdomain); entry != nil {
+		p.routes[subdomain] = entry
 	}
-
-	return nil
+	return entry
 }
 
 // extractSubdomain แกะชื่อ Deployment ID ออกจาก Host Header

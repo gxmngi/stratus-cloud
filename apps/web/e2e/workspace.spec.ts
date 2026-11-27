@@ -56,6 +56,26 @@ test("workspace search, environment fields and filters work", async ({
   );
 });
 
+test("repository preflight reports the build plan and blocks Flutter before queueing", async ({ page }) => {
+  await page.route("**/api/deploy/preflight", async (route) => {
+    const { gitUrl } = route.request().postDataJSON();
+    await route.fulfill({ json: gitUrl.includes("flutter") ? {
+      framework: "Flutter / Dart", buildCommand: null, outputDirectory: null,
+      message: "Flutter Web needs the Flutter SDK. Stratus does not build it yet.",
+    } : { framework: "Astro", buildCommand: "npm install && npm run build", outputDirectory: "dist" } });
+  });
+  const source = page.getByLabel("Git repository or local project path");
+  const deploy = page.getByRole("button", { name: "Deploy project", exact: true });
+  await source.fill("https://github.com/example/astro");
+  await expect(page.getByText("Astro", { exact: true })).toBeVisible();
+  await expect(page.getByText("npm install && npm run build", { exact: true })).toBeVisible();
+  await expect(deploy).toBeEnabled();
+  await source.fill("https://github.com/example/flutter");
+  await expect(deploy).toBeDisabled();
+  await expect(page.getByText(/Flutter Web needs the Flutter SDK/)).toBeVisible();
+  await expect(deploy).toBeDisabled();
+});
+
 test("workspace desktop and mobile are accessible without overflow", async ({
   page,
 }) => {

@@ -138,3 +138,16 @@ subdomain cannot use the endpoint to modify another application's routes.
 This is a local development stack. Public hosting still needs a separate review
 of build isolation, network boundaries, secrets, persistent logs, TLS, quotas and
 recovery behavior before accepting untrusted repositories.
+## Check a repository before deploying
+
+Paste a public GitHub repository URL into the dashboard. Stratus reads the
+repository's default branch and shows the detected framework, planned build
+command, and typical output directory. This check reads metadata and does not
+start a build. Flutter Web projects are identified before the dashboard offers
+to deploy them.
+
+Open **Build settings** to select a folder such as `apps/web` or to override the
+build command and static output folder for this manual deployment. The output
+folder is relative to the project folder and must contain `index.html`. An empty
+setting preserves the existing automatic behavior. GitHub webhooks continue to
+use automatic build settings.
