@@ -30,9 +30,9 @@ export default function Terminal({
 
     const term = new XTerminal({
       theme: {
-        background: "#152038",
-        foreground: "#cbd6e9",
-        cursor: "#58a6ff",
+        background: "#0e1724",
+        foreground: "#d7e4f1",
+        cursor: "#9bd0f9",
         selectionBackground: "#3b4252",
         black: "#8798b5",
         brightBlack: "#97a6be",

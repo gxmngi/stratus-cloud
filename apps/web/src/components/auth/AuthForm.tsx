@@ -11,13 +11,12 @@ import {
   Loader2,
   ArrowUpRight,
   AlertCircle,
-  ShieldCheck,
 } from "lucide-react";
 import { ApiError, authApi } from "@/lib/api";
 import { useAuth } from "./AuthProvider";
 import { SessionScreen } from "./SessionScreen";
 import { Brand } from "../Brand";
-import { Cloudscape } from "../Cloudscape";
+import { Cloudscape, CloudscapeCredit } from "../Cloudscape";
 
 export function AuthForm({ mode }: { mode: "login" | "register" }) {
   const register = mode === "register";
@@ -133,32 +132,10 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         <Cloudscape />
         <Brand />
         <div className="auth-story-content">
-          <span className="auth-eyebrow">
-            A little space to build something great.
-          </span>
-          <h2>
-            Good ideas
-            <br />
-            deserve to
-            <br />
-            be out there.
-          </h2>
-          <p>
-            Your code, a clear path to production.
-            <br />
-            Welcome to your own corner of the cloud.
-          </p>
+          <h2>From commit<br />to production.</h2>
+          <p>Build, preview, and deploy on your own infrastructure.</p>
         </div>
-        <div className="auth-story-footer">
-          <span>Your code. Your cloud.</span>
-          <a
-            href="https://github.com/gxmngi/stratus-cloud"
-            target="_blank"
-            rel="noreferrer"
-          >
-            Explore the project <ArrowUpRight size={14} aria-hidden="true" />
-          </a>
-        </div>
+        <CloudscapeCredit />
       </aside>
 
       <main className="auth-main" id="auth-form">
@@ -188,15 +165,10 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           ) : (
             <>
               <div className="auth-form-heading">
-                <span className="auth-form-eyebrow">
-                  {register
-                    ? "Your next chapter starts here"
-                    : "A place for what you’re building"}
-                </span>
                 <h1>{register ? "Start building." : "Welcome back."}</h1>
                 <p>
                   {register
-                    ? "Create your account. Give your code a place to go."
+                    ? "Create a Stratus account to deploy your projects."
                     : "Sign in to your Stratus workspace."}
                 </p>
               </div>
@@ -376,15 +348,7 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
               </p>
             </>
           )}
-          <div className="auth-assurance">
-            <ShieldCheck size={15} aria-hidden="true" />
-            <span>Your projects. Your workspace. Your control.</span>
-          </div>
         </div>
-        <footer className="auth-main-footer">
-          <span>Stratus Cloud</span>
-          <span>Open source. Independently built.</span>
-        </footer>
       </main>
     </div>
   );

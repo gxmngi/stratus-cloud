@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist_Mono, Rethink_Sans } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/components/auth/AuthProvider";
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
+const rethinkSans = Rethink_Sans({
+  variable: "--font-rethink-sans",
+  weight: "variable",
   subsets: ["latin"],
 });
 
@@ -19,7 +20,7 @@ export const metadata: Metadata = {
     template: "%s | Stratus Cloud",
   },
   description:
-    "Your code. Your cloud. Deploy and manage your applications with Stratus.",
+    "Build, preview, and deploy applications on your own infrastructure.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -27,7 +28,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       data-scroll-behavior="smooth"
-      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
+      className={`${rethinkSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
         <AuthProvider>{children}</AuthProvider>
