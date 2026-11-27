@@ -52,6 +52,17 @@ spare CPU capacity, set `STRATUS_BUILD_CPU_CORES=2` in the Compose environment
 and recreate the builder to allow up to two cores per build. The setting
 applies to new build containers.
 
+## Cache pnpm downloads
+
+For automatic builds with a `pnpm-lock.yaml`, set `STRATUS_PNPM_CACHE=1` and
+recreate the builder. Each project gets its own volume for downloaded packages,
+pnpm's registry metadata, and the pnpm launcher. Dependencies are installed into
+each build's workspace.
+Builds with a custom command, an `.npmrc`, injected environment variables, or
+multiple package-manager lockfiles use the usual install path. The same trust
+and cleanup guidance applies. List pnpm volumes with
+`docker volume ls --filter name=stratus-pnpm-v1-`.
+
 ## Enable public HTTPS
 
 Choose a dashboard hostname such as `console.example.com` and a separate

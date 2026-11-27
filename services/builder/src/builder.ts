@@ -9,6 +9,7 @@ import { waitForContainerReadiness } from './health';
 import { resolveDeploymentWorkspace } from './workspace';
 import { reservedRuntimePorts } from './runtime-ports';
 import { createRuntimeContainer, formatBuildEnvironment, NODE_IMAGE, resolveStartCommand, RUNTIME_PORT } from './runtime';
+import { resolveBuildPlan } from './build-command';
 
 const buildCpuCores = process.env.STRATUS_BUILD_CPU_CORES ?? '1';
 if (buildCpuCores !== '1' && buildCpuCores !== '2') {
@@ -57,42 +58,6 @@ export interface BuildResult {
     error?: string;
     publicError?: string;
     completedAt?: number;
-}
-
-/**
- * วิเคราะห์โครงสร้างโปรเจกต์เพื่อเลือก Package Manager อัตโนมัติแบบ Vercel
- */
-const NPM_CACHE_PATH = '/var/cache/stratus-npm';
-
-function resolveBuildCommand(codeDir: string, customCommand?: string, npmCacheVolume?: string): string {
-    if (customCommand) {
-        return customCommand;
-    }
-
-    const pkgPath = path.join(codeDir, 'package.json');
-    let hasBuildScript = true;
-    if (fs.existsSync(pkgPath)) {
-        try {
-            const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-            if (!pkg.scripts || !pkg.scripts.build) {
-                hasBuildScript = false;
-            }
-        } catch {}
-    }
-
-    if (fs.existsSync(path.join(codeDir, 'pnpm-lock.yaml'))) {
-        return hasBuildScript ? 'npx --yes pnpm install && npx --yes pnpm run build' : 'npx --yes pnpm install';
-    }
-    if (fs.existsSync(path.join(codeDir, 'yarn.lock'))) {
-        return hasBuildScript ? 'npx --yes yarn install && npx --yes yarn run build' : 'npx --yes yarn install';
-    }
-    if (fs.existsSync(path.join(codeDir, 'bun.lockb'))) {
-        return hasBuildScript ? 'npx --yes bun install && npx --yes bun run build' : 'npx --yes bun install';
-    }
-    const install = npmCacheVolume
-        ? `npm install --cache ${NPM_CACHE_PATH} --prefer-offline`
-        : 'npm install';
-    return hasBuildScript ? `${install} && npm run build` : install;
 }
 
 /**
@@ -223,15 +188,13 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
 
     // Step 2: Auto-detect Build Command
     const { formattedEnv, secretValues } = formatBuildEnvironment(options.env);
-    const projectId = options.projectId;
-    const npmCacheVolume = process.env.STRATUS_NPM_CACHE === '1' &&
-        typeof projectId === 'string' && /^proj-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(projectId) &&
-        !customBuildCommand && formattedEnv.length === 0 &&
-        fs.existsSync(path.join(codeDir, 'package-lock.json')) &&
-        !['.npmrc', 'pnpm-lock.yaml', 'yarn.lock', 'bun.lockb'].some(file => fs.existsSync(path.join(codeDir, file)))
-        ? `stratus-npm-v1-${projectId}`
-        : undefined;
-    const effectiveBuildCommand = resolveBuildCommand(codeDir, customBuildCommand, npmCacheVolume);
+    const { command: effectiveBuildCommand, cache } = resolveBuildPlan(codeDir, {
+        customCommand: customBuildCommand,
+        projectId: options.projectId,
+        hasBuildEnvironment: formattedEnv.length > 0,
+        npmCacheEnabled: process.env.STRATUS_NPM_CACHE === '1',
+        pnpmCacheEnabled: process.env.STRATUS_PNPM_CACHE === '1',
+    });
     await emitLog(deploymentId, `[INFO] [${deploymentId}] Resolved build command: "${effectiveBuildCommand}"`);
 
     // Step 3: Initialize Docker Sandbox Container
@@ -254,9 +217,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             Env: formattedEnv, // <-- ฉีด Environment Variables เข้าไปใน Container
             HostConfig: {
                 Binds: [`${hostMountPath}:/app`],
-                ...(npmCacheVolume ? { Mounts: [{
-                    Type: 'volume', Source: npmCacheVolume, Target: NPM_CACHE_PATH,
-                }] } : {}),
+                ...(cache ? { Mounts: [cache] } : {}),
                 Memory: 1024 * 1024 * 1024, // 1GB memory limit
                 MemorySwap: 1024 * 1024 * 1024, // Disallow unbounded swap
                 CpuQuota: buildCpuQuota,
