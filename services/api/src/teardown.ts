@@ -3,6 +3,27 @@ import { db } from './db';
 const queue = 'stratus:deployment-deletions';
 const deleted = 'stratus:deleted-previews';
 
+export const requestProjectDeletion = db.transaction((id: string, owner: string):
+    { status: 'MISSING' | 'BUILDING' } | { status: 'QUEUED'; slug: string | null } => {
+    const project = db.prepare('SELECT slug, production_route_revision FROM projects WHERE id = ? AND owner_id = ?')
+        .get(id, owner) as { slug: string | null; production_route_revision: number } | undefined;
+    if (!project) return { status: 'MISSING' };
+    if (db.prepare("SELECT 1 FROM deployments WHERE project_id = ? AND status NOT IN ('READY', 'FAILED', 'DELETING')").get(id)) {
+        return { status: 'BUILDING' };
+    }
+
+    db.prepare(`INSERT INTO deployment_deletions (deployment_id, owner_id, requested_at)
+        SELECT id, ?, ? FROM deployments WHERE project_id = ? AND status != 'DELETING'`).run(owner, Date.now(), id);
+    db.prepare("UPDATE deployments SET status = 'DELETING' WHERE project_id = ?").run(id);
+    if (project.slug && /^[a-zA-Z0-9_-]+$/.test(project.slug)) {
+        db.prepare(`INSERT INTO deleted_production_routes (slug, revision) VALUES (?, ?)
+            ON CONFLICT(slug) DO UPDATE SET revision = MAX(revision, excluded.revision)`)
+            .run(project.slug, project.production_route_revision + 1);
+    }
+    db.prepare('DELETE FROM projects WHERE id = ?').run(id);
+    return { status: 'QUEUED', slug: project.slug };
+});
+
 export function requestDeploymentDeletion(id: string, owner: string): 'QUEUED' | 'DELETED' | 'MISSING' | 'PRODUCTION' | 'BUILDING' {
     if (!/^[a-zA-Z0-9_-]+$/.test(id)) return 'MISSING';
     return db.transaction(() => {

@@ -13,8 +13,9 @@ export function getOrCreateOwnedProject(userId: string, gitUrl: string): Project
         const slug = db.prepare('SELECT id FROM projects WHERE slug = ?').get(base) ? `${base}-${randomUUID()}` : base;
         const now = Date.now();
         const project = { id: `proj-${randomUUID()}`, owner_id: userId, name, slug, git_url: gitUrl, created_at: now, updated_at: now };
-        db.prepare(`INSERT INTO projects (id, owner_id, name, slug, git_url, created_at, updated_at)
-            VALUES (@id, @owner_id, @name, @slug, @git_url, @created_at, @updated_at)`).run(project);
+        db.prepare(`INSERT INTO projects (id, owner_id, name, slug, git_url, created_at, updated_at, production_route_revision)
+            VALUES (@id, @owner_id, @name, @slug, @git_url, @created_at, @updated_at,
+                COALESCE((SELECT revision FROM deleted_production_routes WHERE slug = @slug), 0))`).run(project);
         return project;
     }).immediate();
 }

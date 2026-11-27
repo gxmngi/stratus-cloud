@@ -107,7 +107,8 @@ function Dashboard() {
   const [notice, setNotice] = useState("");
   const [loadError, setLoadError] = useState("");
   const [confirmation, setConfirmation] = useState<
-    { action: "delete" | "rollback"; deploymentId: string } | null
+    { action: "delete" | "rollback"; deploymentId: string } |
+    { action: "delete-project"; projectId: string; projectName: string } | null
   >(null);
   const [gitUrl, setGitUrl] = useState("fixtures/demo-app");
   const [isDeploying, setIsDeploying] = useState(false);
@@ -152,26 +153,23 @@ function Dashboard() {
 
   const [isDeleting, setIsDeleting] = useState(false);
 
-  const handleDelete = async (deploymentId: string) => {
+  const handleDelete = async (resource: "projects" | "deployments", id: string) => {
     setIsDeleting(true);
+    setNotice("");
+    const label = resource === "projects" ? "project" : "deployment";
     try {
-      const res = await apiFetch(`${API_URL}/api/deployments/${deploymentId}`, {
+      const res = await apiFetch(`${API_URL}/api/${resource}/${encodeURIComponent(id)}`, {
         method: "DELETE",
         credentials: "include",
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        throw new Error(err.error || "Failed to delete deployment");
-      }
-      if (res.status !== 202) {
-        setActiveDeploymentId((current) =>
-          current === deploymentId ? null : current,
-        );
+        throw new Error(err.error || `Failed to delete ${label}`);
       }
       await fetchDeployments();
     } catch (err) {
       setNotice(
-        err instanceof Error ? err.message : "Error deleting deployment",
+        err instanceof Error ? err.message : `Error deleting ${label}`,
       );
     } finally {
       setIsDeleting(false);
@@ -242,6 +240,8 @@ function Dashboard() {
   // Active deployment data derived from list or fallback
   const activeDeployment =
     deployments.find((d) => d.id === activeDeploymentId) || null;
+  const activeProjectId = activeDeployment?.project_id;
+  const activeProjectSlug = activeDeployment?.project_slug;
 
   const hasPendingDeletion = deployments.some((deployment) => deployment.status === "DELETING");
   useEffect(() => {
@@ -940,6 +940,20 @@ function Dashboard() {
                           <Trash2 size={16} />
                         </button>
                       )}
+                      {activeProjectId && activeProjectSlug &&
+                        (activeDeployment.status === "READY" || activeDeployment.status === "FAILED") && (
+                        <button
+                          className="button"
+                          disabled={isDeleting}
+                          onClick={() => setConfirmation({
+                            action: "delete-project",
+                            projectId: activeProjectId,
+                            projectName: activeProjectSlug,
+                          })}
+                        >
+                          <Trash2 size={14} /> Delete project
+                        </button>
+                      )}
                     </div>
                     {metrics?.status === "running" && (
                       <div className="runtime-metrics">
@@ -1020,27 +1034,35 @@ function Dashboard() {
       <ConfirmDialog
         open={confirmation !== null}
         title={
-          confirmation?.action === "delete"
+          confirmation?.action === "delete-project"
+            ? `Delete ${confirmation.projectName}?`
+            : confirmation?.action === "delete"
             ? "Delete this deployment?"
             : "Roll back production?"
         }
         description={
-          confirmation?.action === "delete"
+          confirmation?.action === "delete-project"
+            ? "This removes all deployments, build files and logs for this project and takes its Preview and Production URLs offline. This action cannot be undone."
+            : confirmation?.action === "delete"
             ? "This stops the application and removes its files and logs. This action cannot be undone."
             : "Production traffic will switch to the previous deployment. Your current deployment will remain available."
         }
         confirmLabel={
-          confirmation?.action === "delete"
+          confirmation?.action === "delete-project"
+            ? "Delete project"
+            : confirmation?.action === "delete"
             ? "Delete deployment"
             : "Roll back production"
         }
-        destructive={confirmation?.action === "delete"}
+        destructive={confirmation?.action === "delete" || confirmation?.action === "delete-project"}
         onCancel={() => setConfirmation(null)}
         onConfirm={() => {
           if (!confirmation) return;
           setConfirmation(null);
-          if (confirmation.action === "delete")
-            void handleDelete(confirmation.deploymentId);
+          if (confirmation.action === "delete-project")
+            void handleDelete("projects", confirmation.projectId);
+          else if (confirmation.action === "delete")
+            void handleDelete("deployments", confirmation.deploymentId);
           else void handleRollback(confirmation.deploymentId);
         }}
       />

@@ -2,7 +2,7 @@ import { Router, Request, Response, NextFunction } from 'express';
 import type Redis from 'ioredis';
 import { dbService, type DeploymentRecord } from './db';
 import { getDeploymentMetrics } from './telemetry';
-import { requestDeploymentDeletion } from './teardown';
+import { requestDeploymentDeletion, requestProjectDeletion } from './teardown';
 import { requireSession, requireTrustedOrigin } from './access';
 import { getOwnedProject, getOwnedDeployment, listOwnedProjects, listOwnedDeployments, getOrCreateOwnedProject } from './ownership';
 import { createDeploymentUrl } from './deployment-url';
@@ -50,7 +50,7 @@ export function createProjectRouter(options: {
     baseDomain?: string;
     newDeploymentId: () => string;
     buildsEnabled?: boolean;
-    syncProductionRoute: (slug: string, deployment: DeploymentRecord) => Promise<void>;
+    syncProductionRoute: (slug: string, deployment?: DeploymentRecord) => Promise<void>;
 }) {
     const router = Router();
     const { publisher: redisPublisher, dashboardOrigin, port: PORT,
@@ -102,6 +102,19 @@ export function createProjectRouter(options: {
     router.get('/projects', (req: Request, res: Response) => {
         const projects = listOwnedProjects(res.locals.user.id);
         res.json({ projects });
+    });
+
+    router.delete('/projects/:id', async (req: Request, res: Response) => {
+        const projectId = req.params.id as string;
+        const result = requestProjectDeletion.immediate(projectId, res.locals.user.id);
+        if (result.status === 'QUEUED') {
+            if (result.slug) await syncProductionRoute(result.slug);
+            res.status(202).json({ projectId, status: 'DELETING' });
+        } else if (result.status === 'BUILDING') {
+            res.status(409).json({ error: 'Wait for the project’s builds to finish before deleting it.' });
+        } else {
+            res.status(404).json({ error: 'Project not found' });
+        }
     });
 
     router.delete('/deployments/:id', (req: Request, res: Response) => {

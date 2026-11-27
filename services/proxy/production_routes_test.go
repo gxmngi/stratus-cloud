@@ -94,6 +94,21 @@ func TestMissingArtifactDoesNotConsumeProductionRevision(t *testing.T) {
 	}
 }
 
+func TestDeletedProductionAliasDoesNotRecoverFromStaleUpdates(t *testing.T) {
+	proxy := &ProxyHandler{workspaceBase: t.TempDir(), routes: make(map[string]*RouteEntry)}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"revision":1}`, "project")
+	proxy.applyProductionRoutePayload(`{"action":"delete","subdomain":"project","revision":2}`, "project")
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"revision":1}`, "project")
+	if route := proxy.GetRoute("project"); route != nil {
+		t.Fatalf("deleted production URL still has a route: %v", route)
+	}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-b","type":"dynamic","port":4000,"revision":3}`, "project")
+	proxy.applyProductionRoutePayload(`{"action":"delete","subdomain":"project","revision":2}`, "project")
+	if route := proxy.GetRoute("project"); route == nil || route.Port != 4000 {
+		t.Fatalf("new production URL should survive a stale delete: %v", route)
+	}
+}
+
 func TestScaleToZeroRequiresOptIn(t *testing.T) {
 	t.Setenv("ENABLE_SCALE_TO_ZERO", "")
 	t.Setenv("DISABLE_SCALE_TO_ZERO", "")

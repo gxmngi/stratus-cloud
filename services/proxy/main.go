@@ -49,6 +49,7 @@ type RouteEntry struct {
 	LastActive         time.Time              `json:"-"`
 	stateMu            sync.Mutex             `json:"-"`
 	productionRevision *uint64
+	productionDeleted  bool
 }
 
 // ProxyHandler โครงสร้างจัดการ Subdomain Routing พร้อม In-Memory Cache & Redis Sub
@@ -312,6 +313,9 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 	p.routeMu.RUnlock()
 
 	if exists {
+		if entry.productionDeleted {
+			return nil
+		}
 		return entry
 	}
 
@@ -321,6 +325,9 @@ func (p *ProxyHandler) GetRoute(subdomain string) *RouteEntry {
 
 	// Double-check under lock
 	if entry, exists = p.routes[subdomain]; exists {
+		if entry.productionDeleted {
+			return nil
+		}
 		return entry
 	}
 

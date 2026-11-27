@@ -6,7 +6,7 @@ import crypto from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import { githubWebhookHandler } from './github';
-import { initDatabase, dbService, type ProductionRoute } from './db';
+import { initDatabase, dbService, type ProductionRoute, type ProductionRouteRemoval } from './db';
 import { createAuthRouter } from './auth';
 import { createProjectRouter } from './projects-api';
 import { attachLogStream } from './logs';
@@ -29,19 +29,38 @@ const storeProductionRoute = `
     if current and cjson.decode(current).revision >= tonumber(ARGV[2]) then return 0 end
     redis.call('HSET', KEYS[1], ARGV[1], ARGV[3])
     redis.call('PUBLISH', 'proxy:production', ARGV[3])
-    redis.call('PUBLISH', 'proxy:routes', ARGV[3])
+    if ARGV[4] == 'set' then redis.call('PUBLISH', 'proxy:routes', ARGV[3]) end
     return 1
 `;
 
-async function publishProductionRoute(route: ProductionRoute) {
+async function publishProductionRoute(route: ProductionRoute | ProductionRouteRemoval) {
+    const action = 'action' in route ? route.action : 'set';
     const changed = await redisPublisher.eval(storeProductionRoute, 1, 'stratus:production-routes',
-        route.subdomain, route.revision, JSON.stringify({ action: 'set', ...route }));
+        route.subdomain, route.revision, JSON.stringify({ ...route, action }), action);
     if (changed === 1) console.log(`[ROUTE] Saved revision ${route.revision} for ${route.subdomain}`);
+}
+
+async function removeProductionRoute(slug: string) {
+    const [removal] = dbService.getProductionRouteRemovals(slug);
+    if (!removal) return;
+    try {
+        fs.rmSync(path.join(WORKSPACE_DIR, slug, 'alias.json'), { force: true });
+    } catch (error) {
+        console.error(`[FS] Could not remove route fallback for ${slug}; reconciliation will retry:`, error);
+    }
+    await publishProductionRoute(removal);
 }
 
 async function syncProductionRoute(slug: string) {
     const [route] = dbService.getProductionRoutes(slug);
-    if (!route) return;
+    if (!route) {
+        try {
+            await removeProductionRoute(slug);
+        } catch (error) {
+            console.error(`[ROUTE] Could not remove ${slug}; reconciliation will retry:`, error);
+        }
+        return;
+    }
     try {
         const aliasDir = path.join(WORKSPACE_DIR, slug);
         fs.mkdirSync(aliasDir, { recursive: true });
@@ -98,6 +117,11 @@ async function reconcileProductionRoutes() {
     reconcilingRoutes = true;
     try {
         for (const route of dbService.getProductionRoutes()) await publishProductionRoute(route);
+        for (const removal of dbService.getProductionRouteRemovals()) {
+            await removeProductionRoute(removal.subdomain).catch(error => {
+                console.error(`[ROUTE] Could not remove ${removal.subdomain}:`, error);
+            });
+        }
     } catch (error) {
         console.error('[ROUTE] Reconciliation failed:', error);
     } finally {
