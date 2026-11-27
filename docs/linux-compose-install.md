@@ -47,6 +47,11 @@ local to the Docker host. Use `docker volume ls --filter name=stratus-npm-v1-`
 to find them. When disk space is needed, remove individual unused cache volumes
 with `docker volume rm VOLUME_NAME`. The next build downloads packages again.
 
+Build containers are limited to one CPU core by default. On a host with
+spare CPU capacity, set `STRATUS_BUILD_CPU_CORES=2` in the Compose environment
+and recreate the builder to allow up to two cores per build. The setting
+applies to new build containers.
+
 ## Enable public HTTPS
 
 Choose a dashboard hostname such as `console.example.com` and a separate
