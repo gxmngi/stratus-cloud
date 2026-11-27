@@ -10,6 +10,13 @@ import { resolveDeploymentWorkspace } from './workspace';
 import { reservedRuntimePorts } from './runtime-ports';
 import { createRuntimeContainer, formatBuildEnvironment, NODE_IMAGE, resolveStartCommand, RUNTIME_PORT } from './runtime';
 
+const buildCpuCores = process.env.STRATUS_BUILD_CPU_CORES ?? '1';
+if (buildCpuCores !== '1' && buildCpuCores !== '2') {
+    throw new Error('STRATUS_BUILD_CPU_CORES must be 1 or 2');
+}
+// Docker's default CPU scheduling period is 100,000 microseconds.
+const buildCpuQuota = Number(buildCpuCores) * 100_000;
+
 const docker = new Docker();
 
 // WORKSPACE_DIR: path ภายใน Process นี้ (ใน Container คือ /workspace)
@@ -252,7 +259,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
                 }] } : {}),
                 Memory: 1024 * 1024 * 1024, // 1GB memory limit
                 MemorySwap: 1024 * 1024 * 1024, // Disallow unbounded swap
-                CpuQuota: 100000,          // 1.0 CPU core limit
+                CpuQuota: buildCpuQuota,
                 PidsLimit: 256,            // Fork bomb defense
                 SecurityOpt: ['no-new-privileges:true'], // Prevent privilege escalation
                 CapDrop: ['ALL'],          // Drop all root Linux capabilities
