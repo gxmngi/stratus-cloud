@@ -1,13 +1,16 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { API_URL, apiFetch } from "@/lib/api";
 import { useAuth } from "@/components/auth/AuthProvider";
 import { ProtectedWorkspace } from "@/components/auth/ProtectedWorkspace";
 import {
+  ArrowDown,
+  ArrowUp,
   ArrowUpRight,
+  CheckCircle2,
   Search,
   GitBranch,
   Box,
@@ -15,7 +18,6 @@ import {
   BookOpen,
   Code2,
   LogOut,
-  ExternalLink,
   Play,
   AlertCircle,
   Loader2,
@@ -114,7 +116,15 @@ function Dashboard() {
   }
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All deployments");
-  const [notice, setNotice] = useState("");
+  const [deployNotice, setDeployNotice] = useState("");
+  const [actionFeedback, setActionFeedback] = useState<{
+    kind: "success" | "error";
+    text: string;
+  } | null>(null);
+  const projectFolderRef = useRef<HTMLInputElement>(null);
+  const detailRef = useRef<HTMLElement>(null);
+  const deploymentListRef = useRef<HTMLDivElement>(null);
+  const sourceRef = useRef<HTMLInputElement>(null);
   const [loadError, setLoadError] = useState("");
   const [confirmation, setConfirmation] = useState<
     { action: "delete" | "rollback"; deploymentId: string } |
@@ -189,8 +199,29 @@ function Dashboard() {
     }
   }
 
+  function showProjectFolder() {
+    setShowBuildSettings(true);
+    requestAnimationFrame(() => projectFolderRef.current?.focus());
+  }
+
+  function showDeploymentDetails() {
+    requestAnimationFrame(() => {
+      detailRef.current?.focus({ preventScroll: true });
+      detailRef.current?.scrollIntoView({ block: "start" });
+    });
+  }
+
+  function selectDeployment(deploymentId: string) {
+    setActiveDeploymentId(deploymentId);
+    setActionFeedback(null);
+    if (window.matchMedia("(max-width: 760px)").matches) {
+      showDeploymentDetails();
+    }
+  }
+
   const handlePromote = async (deploymentId: string) => {
     setIsPromoting(true);
+    setActionFeedback(null);
     try {
       const res = await apiFetch(
         `${API_URL}/api/deployments/${deploymentId}/promote`,
@@ -204,10 +235,12 @@ function Dashboard() {
         throw new Error(err.error || "Failed to promote deployment");
       }
       await fetchDeployments();
+      setActionFeedback({ kind: "success", text: "Production updated to " + deploymentId });
     } catch (err) {
-      setNotice(
-        err instanceof Error ? err.message : "Error promoting deployment",
-      );
+      setActionFeedback({
+        kind: "error",
+        text: err instanceof Error ? err.message : "Could not promote " + deploymentId,
+      });
     } finally {
       setIsPromoting(false);
     }
@@ -217,7 +250,7 @@ function Dashboard() {
 
   const handleDelete = async (resource: "projects" | "deployments", id: string) => {
     setIsDeleting(true);
-    setNotice("");
+    setActionFeedback(null);
     const label = resource === "projects" ? "project" : "deployment";
     try {
       const res = await apiFetch(`${API_URL}/api/${resource}/${encodeURIComponent(id)}`, {
@@ -229,10 +262,15 @@ function Dashboard() {
         throw new Error(err.error || `Failed to delete ${label}`);
       }
       await fetchDeployments();
+      setActionFeedback({
+        kind: "success",
+        text: res.status === 202 ? "Deletion queued. Cleanup is in progress." : resource === "projects" ? "Project deleted" : "Deployment deleted",
+      });
     } catch (err) {
-      setNotice(
-        err instanceof Error ? err.message : `Error deleting ${label}`,
-      );
+      setActionFeedback({
+        kind: "error",
+        text: err instanceof Error ? err.message : "Could not delete " + label,
+      });
     } finally {
       setIsDeleting(false);
     }
@@ -240,6 +278,7 @@ function Dashboard() {
 
   const handleRollback = async (deploymentId: string) => {
     setIsRollingBack(true);
+    setActionFeedback(null);
     try {
       const res = await apiFetch(
         `${API_URL}/api/deployments/${deploymentId}/rollback`,
@@ -253,10 +292,12 @@ function Dashboard() {
         throw new Error(err.error || "Failed to rollback deployment");
       }
       await fetchDeployments();
+      setActionFeedback({ kind: "success", text: "Production restored to the previous release" });
     } catch (err) {
-      setNotice(
-        err instanceof Error ? err.message : "Error rolling back deployment",
-      );
+      setActionFeedback({
+        kind: "error",
+        text: err instanceof Error ? err.message : "Could not roll back production",
+      });
     } finally {
       setIsRollingBack(false);
     }
@@ -357,7 +398,8 @@ function Dashboard() {
     if (!source || cannotDeploy || isDeploying) return;
 
     setIsDeploying(true);
-    setNotice("");
+    setDeployNotice("");
+    setActionFeedback(null);
 
     const envPayload: Record<string, string> = {};
     for (const item of envVars) {
@@ -395,13 +437,11 @@ function Dashboard() {
       setSearch("");
       setActiveDeploymentId(data.deploymentId);
       await fetchDeployments();
+      setActionFeedback({ kind: "success", text: "Deployment queued. Follow its progress in Build logs." });
+      showDeploymentDetails();
     } catch (err) {
       console.error(err);
-      setNotice(
-        err instanceof Error
-          ? err.message
-          : "Failed to connect to the API server",
-      );
+      setDeployNotice(err instanceof Error ? err.message : "Could not reach the deployment service");
     } finally {
       setIsDeploying(false);
     }
@@ -540,42 +580,50 @@ function Dashboard() {
           </div>
         </div>
       </header>
-      <main id="workspace-main" className="workspace-main">
-        {(notice || signOutError) && (
+      <main id="workspace-main" className="workspace-main" tabIndex={-1}>
+        {signOutError && (
           <div role="alert" className="workspace-alert">
             <AlertCircle size={17} />
-            <span>{notice || signOutError}</span>
+            <span>{signOutError}</span>
             <button
               className="icon-button"
               aria-label="Dismiss message"
-              onClick={() => {
-                setNotice("");
-                setSignOutError("");
-              }}
+              onClick={() => setSignOutError("")}
             >
               <X size={16} />
             </button>
           </div>
         )}
+        <header className="workspace-heading">
+          <h1>Deployments</h1>
+          <a className="workspace-jump" href="#deployments">
+            Recent activity <ArrowDown size={16} aria-hidden="true" />
+          </a>
+        </header>
         <section
           className="deploy-composer"
           id="new-deployment"
           aria-labelledby="composer-title"
         >
-          <Cloudscape />
+          <div className="composer-art">
+            <Cloudscape />
+            <CloudscapeCredit />
+          </div>
           <div className="composer-intro">
-            <h1 id="composer-title">Deployments</h1>
-            <p>Deploy from a Git repository or a local project.</p>
+            <h2 id="composer-title">Deploy a project</h2>
+            <p>Build a Git repository or a local project, then open its preview</p>
           </div>
           <form onSubmit={handleDeploy}>
-            <label className="sr-only" htmlFor="git-repository">
+            <label className="repository-label" htmlFor="git-repository">
               Git repository or local project path
             </label>
             <div className="repository-field">
               <GitBranch size={19} aria-hidden="true" />
               <input
                 id="git-repository"
+                ref={sourceRef}
                 value={gitUrl}
+                aria-describedby={isGitHub ? "repository-check" : undefined}
                 onChange={(e) => changeSource(e.target.value)}
                 required
                 autoCapitalize="none"
@@ -595,6 +643,52 @@ function Dashboard() {
                 {isDeploying ? "Queuing…" : "Deploy project"}
               </button>
             </div>
+            {deployNotice && (
+              <p className="composer-error" role="alert">
+                <AlertCircle size={16} aria-hidden="true" /> {deployNotice}
+              </p>
+            )}
+            {isGitHub && (
+              <div className="repository-check" id="repository-check">
+                <div role="status">
+                  {needsCheck ? (
+                    <p><Loader2 size={16} className="auth-spin" aria-hidden="true" /> Checking repository…</p>
+                  ) : finding ? (
+                    <>
+                      <p>
+                        {finding.message
+                          ? <AlertCircle size={16} aria-hidden="true" />
+                          : <CheckCircle2 size={16} aria-hidden="true" />}
+                        <strong>{finding.framework === "Unknown" ? "Project folder needs attention" : finding.framework}</strong>
+                      </p>
+                      {finding.message ? (
+                        <p className="check-description">{finding.message}</p>
+                      ) : (
+                        <dl>
+                          <div><dt>Build command</dt><dd>{buildCommand.trim() || finding.buildCommand || "Auto-detected"}</dd></div>
+                          <div><dt>Output folder</dt><dd>{outputDirectory.trim() || finding.outputDirectory || "Auto-detected"}</dd></div>
+                        </dl>
+                      )}
+                    </>
+                  ) : (
+                    <p><AlertCircle size={16} aria-hidden="true" /> {currentCheck?.error}</p>
+                  )}
+                </div>
+                {!needsCheck && (
+                  <div className="check-actions">
+                    {finding?.framework === "Unknown" && (
+                      <button type="button" onClick={showProjectFolder}>Choose project folder <ArrowDown size={14} aria-hidden="true" /></button>
+                    )}
+                    {currentCheck?.error && (
+                      <>
+                        <button type="button" onClick={() => setCheckAttempt(value => value + 1)}>Retry check</button>
+                        {projectRoot && <button type="button" onClick={showProjectFolder}>Change project folder</button>}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
             <div className="composer-options">
               <div>
                 <span>Examples</span>
@@ -630,34 +724,12 @@ function Dashboard() {
                 Environment variables <ChevronDown size={14} />
               </button>
             </div>
-            {isGitHub && (
-              <div className="repository-check" aria-live="polite">
-                {needsCheck ? (
-                  <p><Loader2 size={15} className="auth-spin" /> Checking repository…</p>
-                ) : finding ? (
-                  <>
-                    <p><strong>{finding.framework}</strong>{finding.message && <> · {finding.message}</>}</p>
-                    {!finding.message && (
-                      <dl>
-                        <div><dt>Build command</dt><dd>{buildCommand.trim() || finding.buildCommand}</dd></div>
-                        <div><dt>Output</dt><dd>{outputDirectory.trim() || finding.outputDirectory || "Auto-detected"}</dd></div>
-                      </dl>
-                    )}
-                  </>
-                ) : (
-                  <p>
-                    {currentCheck?.error}
-                    <button type="button" onClick={() => setCheckAttempt(value => value + 1)}>Retry</button>
-                  </p>
-                )}
-              </div>
-            )}
             {showBuildSettings && (
               <div id="build-settings" className="environment-fields build-settings">
                 <p>These settings apply to this deployment.</p>
                 <label>
                   Project folder
-                  <input value={rootDirectory} onChange={e => setRootDirectory(e.target.value)} placeholder=". (repository root)" />
+                  <input ref={projectFolderRef} value={rootDirectory} onChange={e => setRootDirectory(e.target.value)} placeholder=". (repository root)" />
                 </label>
                 <label>
                   Build command
@@ -715,11 +787,11 @@ function Dashboard() {
               </div>
             )}
           </form>
-          <CloudscapeCredit />
         </section>
         <section
           id="deployments"
           className="deployment-section"
+          tabIndex={-1}
           aria-labelledby="deployment-heading"
         >
           <div className="section-title">
@@ -774,7 +846,7 @@ function Dashboard() {
             </div>
           )}
           <div className={activeDeployment ? "deployment-grid" : "deployment-grid empty"}>
-            <div className="deployment-list" aria-label="Deployment history">
+            <div className="deployment-list" ref={deploymentListRef} role="region" aria-label="Deployment history">
               {isLoadingHistory ? (
                 <div className="empty-state" role="status">
                   <Loader2 className="auth-spin" size={24} />
@@ -782,17 +854,22 @@ function Dashboard() {
                 </div>
               ) : visibleDeployments.length === 0 ? (
                 <div className="empty-state">
-                  <Box size={28} />
-                  <h3>
-                    {deployments.length
-                      ? "No matching deployments"
-                      : "No deployments yet"}
-                  </h3>
-                  <p>
-                    {deployments.length
-                      ? "Try another search or filter."
-                      : "Enter a repository URL or choose an example above."}
-                  </p>
+                  <Box size={24} aria-hidden="true" />
+                  <h3>{loadError ? "Deployment history unavailable" : deployments.length ? "No matching deployments" : "No deployments yet"}</h3>
+                  {!loadError && (
+                    <>
+                      <p>{deployments.length ? "Change your search or clear the filters" : "Enter a repository URL or try a built-in example"}</p>
+                      {deployments.length ? (
+                        <button className="button" onClick={() => { setFilter("All deployments"); setSearch(""); }}>
+                          Clear filters
+                        </button>
+                      ) : (
+                        <button className="button" onClick={() => sourceRef.current?.focus()}>
+                          Add a repository
+                        </button>
+                      )}
+                    </>
+                  )}
                 </div>
               ) : (
                 visibleDeployments.map((dep) => (
@@ -803,7 +880,7 @@ function Dashboard() {
                       "deployment-row " +
                       (visibleDeploymentId === dep.id ? "selected" : "")
                     }
-                    onClick={() => setActiveDeploymentId(dep.id)}
+                    onClick={() => selectDeployment(dep.id)}
                   >
                     <span
                       className={
@@ -838,16 +915,27 @@ function Dashboard() {
                 ))
               )}
             </div>
+            {!activeDeployment && actionFeedback && (
+              <p className={"deployment-feedback " + actionFeedback.kind} role={actionFeedback.kind === "error" ? "alert" : "status"}>
+                {actionFeedback.text}
+              </p>
+            )}
             {activeDeployment && (
-              <div className="deployment-detail">
+              <section className="deployment-detail" ref={detailRef} tabIndex={-1} aria-labelledby="selected-deployment">
+                <button type="button" className="deployment-back" onClick={() => deploymentListRef.current?.querySelector<HTMLButtonElement>('button[aria-pressed="true"]')?.focus()}>
+                  <ArrowUp size={16} aria-hidden="true" /> Back to deployments
+                </button>
                 <div className="detail-header">
                   <span className="detail-label">Deployment details</span>
                   {badge(activeDeployment)}
                 </div>
                 <div className="detail-title">
-                  <h3>{projectName(activeDeployment)}</h3>
+                  <h3 id="selected-deployment">{projectName(activeDeployment)}</h3>
                   <span>{activeDeployment.id}</span>
                 </div>
+                {activeDeployment.status === "FAILED" && (
+                  <p className="deployment-feedback error">The build failed. Review the build logs for the cause.</p>
+                )}
                 <dl className="detail-facts">
                   <div>
                     <dt>Environment</dt>
@@ -896,62 +984,32 @@ function Dashboard() {
                 </dl>
                 {activeDeployment.status === "READY" && (
                   <div className="deployment-domains">
-                    <span>Preview URL</span>
-                    <a
-                      href={activeDeployment.live_url}
-                      target="_blank"
-                      rel="noreferrer"
-                    >
-                      {activeDeployment.live_url.replace(
-                        /^https?:\/\//,
-                        "",
-                      )}
-                      <ArrowUpRight size={14} />
+                    <a href={activeDeployment.live_url} target="_blank" rel="noreferrer" aria-label="Visit preview">
+                      <span><strong>Preview</strong><small>{activeDeployment.live_url.replace(/^https?:\/\//, "")}</small></span>
+                      <ArrowUpRight size={16} aria-hidden="true" />
                     </a>
                     {activeDeployment.production_url && (
-                      <>
-                        <span>Production URL</span>
-                        <a
-                          href={activeDeployment.production_url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          {activeDeployment.production_url.replace(
-                            /^https?:\/\//,
-                            "",
-                          )}
-                          <ArrowUpRight size={14} />
-                        </a>
-                      </>
+                      <a href={activeDeployment.production_url} target="_blank" rel="noreferrer" aria-label="Visit production">
+                        <span><strong>Production</strong><small>{activeDeployment.production_url.replace(/^https?:\/\//, "")}</small></span>
+                        <ArrowUpRight size={16} aria-hidden="true" />
+                      </a>
                     )}
                   </div>
                 )}
                 <div className="detail-actions">
-                  {activeDeployment.status === "READY" && (
-                    <>
-                      <a
-                        className="button primary"
-                        href={activeDeployment.live_url}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        Visit preview <ExternalLink size={14} />
-                      </a>
-                      {!activeDeployment.is_production && (
-                        <button
-                          className="button"
-                          disabled={isPromoting}
-                          onClick={() => handlePromote(activeDeployment.id)}
-                        >
-                          {isPromoting ? (
-                            <Loader2 size={14} className="auth-spin" />
-                          ) : (
-                            <ArrowUpRight size={14} />
-                          )}{" "}
-                          Promote
-                        </button>
+                  {activeDeployment.status === "READY" && !activeDeployment.is_production && (
+                    <button
+                      className="button primary"
+                      disabled={isPromoting}
+                      onClick={() => handlePromote(activeDeployment.id)}
+                    >
+                      {isPromoting ? (
+                        <Loader2 size={16} className="auth-spin" aria-hidden="true" />
+                      ) : (
+                        <ArrowUpRight size={16} aria-hidden="true" />
                       )}
-                    </>
+                      Promote to production
+                    </button>
                   )}
                   {activeDeployment.is_production &&
                     activeDeployment.can_rollback && (
@@ -965,40 +1023,47 @@ function Dashboard() {
                           })
                         }
                       >
-                        <RotateCcw size={14} /> Rollback
+                        <RotateCcw size={16} aria-hidden="true" /> Roll back
                       </button>
                     )}
-                  {!activeDeployment.is_production &&
-                    (activeDeployment.status === "READY" || activeDeployment.status === "FAILED") && (
-                    <button
-                      className="icon-button delete-button"
-                      aria-label="Delete deployment"
-                      disabled={isDeleting}
-                      onClick={() =>
-                        setConfirmation({
-                          action: "delete",
-                          deploymentId: activeDeployment.id,
-                        })
-                      }
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  )}
-                  {activeProjectId && activeProjectSlug &&
-                    (activeDeployment.status === "READY" || activeDeployment.status === "FAILED") && (
-                    <button
-                      className="button project-delete"
-                      disabled={isDeleting}
-                      onClick={() => setConfirmation({
-                        action: "delete-project",
-                        projectId: activeProjectId,
-                        projectName: activeProjectSlug,
-                      })}
-                    >
-                      <Trash2 size={14} /> Delete project
-                    </button>
-                  )}
                 </div>
+                {(activeDeployment.status === "READY" || activeDeployment.status === "FAILED") &&
+                  (!activeDeployment.is_production || (activeProjectId && activeProjectSlug)) && (
+                  <div className="deployment-management">
+                    {!activeDeployment.is_production && (
+                      <button
+                        className="button subtle delete-button"
+                        disabled={isDeleting}
+                        onClick={() =>
+                          setConfirmation({
+                            action: "delete",
+                            deploymentId: activeDeployment.id,
+                          })
+                        }
+                      >
+                        <Trash2 size={16} aria-hidden="true" /> Delete deployment
+                      </button>
+                    )}
+                    {activeProjectId && activeProjectSlug && (
+                      <button
+                        className="button subtle project-delete"
+                        disabled={isDeleting}
+                        onClick={() => setConfirmation({
+                          action: "delete-project",
+                          projectId: activeProjectId,
+                          projectName: activeProjectSlug,
+                        })}
+                      >
+                        <Trash2 size={16} aria-hidden="true" /> Delete project
+                      </button>
+                    )}
+                  </div>
+                )}
+                {actionFeedback && (
+                  <p className={"deployment-feedback " + actionFeedback.kind} role={actionFeedback.kind === "error" ? "alert" : "status"}>
+                    {actionFeedback.text}
+                  </p>
+                )}
                 {metrics?.status === "running" && (
                   <div className="runtime-metrics">
                     <div>
@@ -1044,10 +1109,12 @@ function Dashboard() {
                   </p>
                 )}
                 <Terminal
+                  key={activeDeployment.id}
                   deploymentId={activeDeployment.id}
+                  building={activeDeployment.status === "QUEUED" || activeDeployment.status === "BUILDING"}
                   onStatusChange={() => void fetchDeployments()}
                 />
-              </div>
+              </section>
             )}
           </div>
         </section>

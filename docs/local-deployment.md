@@ -40,10 +40,10 @@ than terminating unknown processes automatically.
 
 1. Open `http://localhost:3000/login`.
 2. Use `alice@example.test` / `Stratus local Alice demo 2026`.
-3. Enter `fixtures/demo-app` and click Deploy.
+3. Enter `fixtures/demo-app` and select **Deploy project**.
 4. Follow QUEUED → BUILDING → READY and inspect live/persisted logs.
 5. Open the preview, `http://DEPLOYMENT_ID.localhost:8000`.
-6. Promote a later READY deployment, then roll back the production alias.
+6. Use **Promote to production** on a later ready deployment, then use **Roll back** on the production deployment.
 
 The local launcher uses `services/data/auth-dev/stratus.db` and the workspace
 under `services/builder/workspace`. It does not use the regular database or

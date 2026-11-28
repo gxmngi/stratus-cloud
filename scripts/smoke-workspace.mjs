@@ -86,14 +86,14 @@ try {
     assert.equal((await productionHealth(project.slug)).deploymentId, first.id);
     passed('Second build remained a preview without replacing production');
     const promoted = page.waitForResponse(r => r.url().endsWith(`/${second.id}/promote`) && r.request().method() === 'POST');
-    await page.getByRole('button', { name: 'Promote', exact: true }).click();
+    await page.getByRole('button', { name: 'Promote to production', exact: true }).click();
     assert.equal((await promoted).status(), 200);
     assert.equal((await productionHealth(project.slug)).deploymentId, second.id);
     passed('Promote button switched actual production traffic to the second runtime');
     await page.getByLabel('Search deployments').fill(run);
     await page.evaluate(() => window.scrollTo({ top: 0, behavior: 'instant' }));
     await page.screenshot({ path: path.join(directory, 'production-desktop.png'), fullPage: true });
-    await page.getByRole('button', { name: 'Rollback', exact: true }).click();
+    await page.getByRole('button', { name: 'Roll back', exact: true }).click();
     const rolledBack = page.waitForResponse(r => r.url().endsWith(`/${second.id}/rollback`) && r.request().method() === 'POST');
     await page.getByRole('dialog').getByRole('button', { name: 'Roll back production', exact: true }).click();
     assert.equal((await rolledBack).status(), 200);
@@ -102,7 +102,17 @@ try {
     await page.getByRole('button', { name: 'Delete deployment', exact: true }).click();
     const removed = page.waitForResponse(r => r.url().endsWith(`/${second.id}`) && r.request().method() === 'DELETE');
     await page.getByRole('dialog').getByRole('button', { name: 'Delete deployment', exact: true }).click();
-    assert.equal((await removed).status(), 200);
+    const removal = await removed;
+    assert.equal(removal.status(), 202);
+    const deadline = Date.now() + 30000;
+    let deletionStatus;
+    do {
+        deletionStatus = (await context.request.get(`http://localhost:4000/api/deployments/${second.id}`)).status();
+        if (deletionStatus === 404) break;
+        assert.equal(deletionStatus, 200);
+        await new Promise(resolve => setTimeout(resolve, 500));
+    } while (Date.now() < deadline);
+    assert.equal(deletionStatus, 404, 'Preview cleanup did not finish');
     assert.equal((await productionHealth(project.slug)).deploymentId, first.id);
     passed('Deleting the superseded preview preserved the production runtime');
     report.success = true;

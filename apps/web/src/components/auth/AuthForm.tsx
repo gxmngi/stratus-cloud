@@ -132,28 +132,20 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
         <Cloudscape />
         <Brand />
         <div className="auth-story-content">
-          <h2>From commit<br />to production.</h2>
-          <p>Build, preview, and deploy on your own infrastructure.</p>
+          <h2>From commit<br />to production</h2>
+          <p>Build and preview apps on your own infrastructure</p>
         </div>
         <CloudscapeCredit />
       </aside>
 
-      <main className="auth-main" id="auth-form">
-        <div className="auth-mobile-brand">
-          <Brand />
-        </div>
+      <main className="auth-main" id="auth-form" tabIndex={-1}>
         <div className="auth-form-wrap">
           {created ? (
             <div className="auth-success" role="status">
               <span className="auth-success-icon">
                 <Check size={28} aria-hidden="true" />
               </span>
-              <span className="auth-form-eyebrow">Account created</span>
-              <h1>
-                Your workspace
-                <br />
-                is one sign-in away.
-              </h1>
+              <h1>Account created</h1>
               <p>
                 Your account for <strong>{email.trim()}</strong> is ready. Sign
                 in to start your first deployment.
@@ -165,11 +157,11 @@ export function AuthForm({ mode }: { mode: "login" | "register" }) {
           ) : (
             <>
               <div className="auth-form-heading">
-                <h1>{register ? "Start building." : "Welcome back."}</h1>
+                <h1>{register ? "Create an account" : "Sign in to Stratus"}</h1>
                 <p>
                   {register
-                    ? "Create a Stratus account to deploy your projects."
-                    : "Sign in to your Stratus workspace."}
+                    ? "Create a workspace for your deployments"
+                    : "Open your deployment workspace"}
                 </p>
               </div>
               <form

@@ -1,16 +1,16 @@
 @import "tailwindcss";
 
 :root {
-  --background: #edf1f3;
-  --foreground: #151d27;
+  --background: #f0f2f3;
+  --foreground: #15212d;
   --muted: #4e5c6c;
-  --line: #d8e0e5;
+  --line: #d3dce2;
   --surface: #fff;
   --accent: #174a72;
   --accent-dark: #102f4c;
   --night: #0b111b;
   --content-width: 1500px;
-  --gutter: clamp(24px, 5vw, 80px);
+  --gutter: clamp(24px, 4vw, 64px);
 }
 
 @theme inline {
@@ -30,6 +30,8 @@ body {
   color: var(--foreground);
   font-family: var(--font-rethink-sans), system-ui, sans-serif;
   font-size: 15px;
+  font-variant-numeric: tabular-nums;
+  accent-color: var(--accent);
 }
 
 button, input {
@@ -118,8 +120,8 @@ svg {
 }
 
 .button {
-  min-height: 42px;
-  padding: 8px 15px;
+  min-height: 44px;
+  padding: 8px 16px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface);
@@ -172,8 +174,8 @@ svg {
 }
 
 .icon-button {
-  width: 42px;
-  min-height: 42px;
+  width: 44px;
+  min-height: 44px;
   flex: 0 0 auto;
   border: 1px solid transparent;
   border-radius: 8px;
@@ -194,7 +196,7 @@ svg {
   z-index: 5;
   top: 0;
   border-bottom: 1px solid #dbe3e7;
-  background: #f6f8f9;
+  background: #fafbfc;
 }
 
 .workspace-topbar {
@@ -274,7 +276,7 @@ svg {
 .workspace-main {
   max-width: var(--content-width);
   margin-inline: auto;
-  padding: clamp(24px, 3vw, 44px) var(--gutter) 68px;
+  padding: 32px var(--gutter) 64px;
 }
 
 .workspace-alert {
@@ -294,17 +296,53 @@ svg {
   flex: 1;
 }
 
-/* Compose a deploy in the same place as the workspace introduction. */
+.workspace-heading {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 4px 20px;
+  margin-bottom: 20px;
+}
+
+.workspace-heading h1 {
+  font-size: 3rem;
+  line-height: 1.04;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+
+.workspace-jump {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  gap: 8px;
+  color: var(--accent);
+  font-size: 14px;
+}
+
+.workspace-jump:hover {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.composer-art {
+  position: absolute;
+  z-index: -1;
+  inset: 0 0 0 62%;
+  overflow: hidden;
+}
+
 .deploy-composer {
   position: relative;
   isolation: isolate;
   display: grid;
   align-content: center;
-  min-height: 364px;
-  padding: clamp(30px, 4.6vw, 66px);
-  border-radius: 22px;
+  min-height: 224px;
+  padding: 28px max(32%, 220px) 28px 32px;
+  border-radius: 16px;
   background: var(--night);
-  color: #f9fbff;
+  color: #f5f8fc;
   overflow: hidden;
 }
 
@@ -317,8 +355,7 @@ svg {
 }
 
 .deploy-composer .cloudscape {
-  left: 26%;
-  background-position: right 78%;
+  background-position: 71% 72%;
 }
 
 .cloudscape::after {
@@ -348,31 +385,39 @@ svg {
   text-underline-offset: 3px;
 }
 
-.composer-intro h1 {
+.composer-intro h2 {
   margin: 0;
-  font-size: clamp(50px, 6vw, 94px);
-  font-weight: 710;
-  line-height: 0.99;
-  letter-spacing: -0.039em;
+  font-size: 1.875rem;
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -0.03em;
 }
 
 .composer-intro p {
-  margin: 17px 0 25px;
-  color: #dae3ed;
-  font-size: clamp(15px, 1.4vw, 18px);
+  margin: 4px 0 16px;
+  color: #c1cedc;
+  font-size: 14px;
   line-height: 1.45;
 }
 
 .deploy-composer form {
-  width: min(640px, 100%);
+  width: min(100%, 688px);
+}
+
+.repository-label {
+  display: block;
+  margin-bottom: 4px;
+  color: #e6edf7;
+  font-size: 13px;
+  font-weight: 550;
 }
 
 .repository-field {
   display: flex;
   align-items: center;
-  gap: 11px;
+  gap: 8px;
   min-width: 0;
-  padding: 6px 6px 6px 14px;
+  padding: 4px 4px 4px 12px;
   border: 1px solid #536276;
   border-radius: 12px;
   background: #101b2b;
@@ -388,7 +433,7 @@ svg {
 .repository-field input {
   flex: 1;
   min-width: 0;
-  height: 42px;
+  height: 44px;
   outline: none;
   color: #f1f6fc;
   font-size: 16px;
@@ -399,8 +444,8 @@ svg {
 }
 
 .repository-field .button.primary {
-  min-height: 43px;
-  padding-inline: 17px;
+  min-height: 44px;
+  padding-inline: 16px;
   border-color: #e3edf8;
   background: #e3edf8;
   color: #132c44;
@@ -446,8 +491,8 @@ svg {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  min-height: 36px;
-  border-radius: 5px;
+  min-height: 44px;
+  border-radius: 6px;
   color: #e6edf7;
   font-size: 13px;
   font-weight: 650;
@@ -511,12 +556,12 @@ svg {
 
 .repository-check {
   margin-top: 8px;
-  padding: 12px 14px;
+  padding: 12px;
   border: 1px solid #536276;
-  border-radius: 10px;
+  border-radius: 8px;
   background: #101b2b;
   color: #e6edf7;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .repository-check p {
@@ -525,13 +570,45 @@ svg {
 
 .repository-check p svg {
   display: inline-block;
-  margin-right: 5px;
+  margin-right: 4px;
+  vertical-align: -3px;
 }
 
 .repository-check button {
-  margin-left: 9px;
-  text-decoration: underline;
-  text-underline-offset: 3px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding-inline: 8px;
+  border: 1px solid #69839a;
+  border-radius: 6px;
+  color: #f2f7fd;
+  font-weight: 600;
+}
+
+.repository-check button:hover {
+  background: #26394e;
+}
+
+.check-actions:not(:empty) {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.repository-check .check-description {
+  margin-top: 4px;
+  color: #cbd7e5;
+}
+
+.composer-error {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 0;
+  color: #ffd6d9;
+  overflow-wrap: anywhere;
 }
 
 .repository-check dl {
@@ -542,7 +619,7 @@ svg {
 
 .repository-check dl > div {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
+  grid-template-columns: 104px minmax(0, 1fr);
   gap: 8px;
 }
 
@@ -559,8 +636,9 @@ svg {
 }
 
 .build-settings input {
-  min-height: 40px;
-  padding-inline: 9px;
+  min-height: 44px;
+  min-width: 0;
+  padding-inline: 12px;
   border: 1px solid #536276;
   border-radius: 6px;
   background: #18273a;
@@ -573,7 +651,7 @@ svg {
 
 /* Deployment activity and inspector */
 .deployment-section {
-  margin-top: clamp(35px, 4vw, 58px);
+  margin-top: 36px;
 }
 
 .section-title, .deployment-toolbar {
@@ -589,8 +667,8 @@ svg {
 
 .section-title h2 {
   margin: 0;
-  font-size: clamp(29px, 3vw, 44px);
-  font-weight: 720;
+  font-size: 2rem;
+  font-weight: 600;
   letter-spacing: -0.034em;
   line-height: 1.05;
 }
@@ -606,8 +684,7 @@ svg {
 
 .activity-counts strong {
   color: var(--foreground);
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
+  font-weight: 600;
 }
 
 .deployment-toolbar {
@@ -677,7 +754,7 @@ svg {
   display: grid;
   grid-template-columns: minmax(265px, 0.82fr) minmax(0, 1.35fr);
   align-items: start;
-  gap: 17px;
+  gap: 16px;
 }
 
 .deployment-grid.empty {
@@ -687,7 +764,7 @@ svg {
 .deployment-list, .deployment-detail {
   min-width: 0;
   border: 1px solid var(--line);
-  border-radius: 13px;
+  border-radius: 12px;
   background: var(--surface);
 }
 
@@ -717,8 +794,7 @@ svg {
 }
 
 .deployment-row.selected {
-  background: #e6eff5;
-  box-shadow: inset 3px 0 var(--accent);
+  background: #e5eef4;
 }
 
 .deployment-row:focus-visible {
@@ -805,7 +881,7 @@ svg {
   overflow: hidden;
 }
 
-.detail-header, .detail-title, .detail-actions, .runtime-note {
+.detail-header, .detail-title, .detail-actions, .deployment-management, .runtime-note {
   padding-inline: var(--detail-gutter);
 }
 
@@ -829,8 +905,8 @@ svg {
 
 .detail-title h3 {
   margin: 0;
-  font-size: clamp(26px, 3.4vw, 42px);
-  font-weight: 750;
+  font-size: 2rem;
+  font-weight: 600;
   line-height: 1.12;
   letter-spacing: -0.035em;
   overflow-wrap: anywhere;
@@ -877,13 +953,9 @@ svg {
 
 .deployment-domains {
   display: grid;
-  gap: 3px;
-  margin: 17px var(--detail-gutter) 0;
-  padding: 12px 15px;
-  border: 1px solid #e0e8ed;
-  border-radius: 8px;
-  background: #f3f7f9;
-  font-size: 13px;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 216px), 1fr));
+  gap: 8px;
+  margin: 16px var(--detail-gutter);
 }
 
 .deployment-domains a {
@@ -892,18 +964,31 @@ svg {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  color: #174f7a;
-  font-weight: 700;
+  padding: 8px 12px;
+  border: 1px solid #d7e3eb;
+  border-radius: 8px;
+  background: #f2f6f8;
+  color: var(--accent);
+  font-size: 14px;
   overflow-wrap: anywhere;
 }
 
-.deployment-domains a:hover {
-  text-decoration: underline;
-  text-underline-offset: 3px;
+.deployment-domains strong, .deployment-domains small {
+  display: block;
 }
 
-.deployment-domains a + span {
-  margin-top: 8px;
+.deployment-domains small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.deployment-domains a:hover {
+  background: #e6eef4;
+}
+
+.deployment-domains a:hover strong {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }
 
 .detail-actions {
@@ -911,7 +996,7 @@ svg {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  margin-block: 17px 21px;
+  margin-block: 16px;
 }
 
 .project-delete, .delete-button {
@@ -924,7 +1009,60 @@ svg {
 }
 
 .project-delete {
-  margin-left: auto;
+  margin-left: 0;
+}
+
+.deployment-management {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-block: 0 12px;
+}
+
+.deployment-management .button {
+  padding-inline: 8px;
+}
+
+.deployment-management .button:hover {
+  background: #fff0f2;
+}
+
+.deployment-detail .deployment-feedback {
+  margin: 0 var(--detail-gutter) 12px;
+}
+
+.deployment-feedback {
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.deployment-feedback.success {
+  background: #e9f3ee;
+  color: #22563b;
+}
+
+.deployment-feedback.error {
+  background: #fff1f2;
+  color: #852b37;
+}
+
+.deployment-back {
+  display: none;
+}
+
+.deployment-detail:focus-visible, .deployment-list:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 4px;
+}
+
+.deployment-detail:focus, .deployment-list:focus {
+  scroll-margin-top: 0;
+}
+
+.detail-actions:empty {
+  display: none;
 }
 
 .runtime-metrics {
@@ -984,7 +1122,11 @@ svg {
   background: #9bd0f9;
 }
 
-.build-terminal code {
+.terminal-dot[data-live="true"] {
+  background: #83d6ad;
+}
+
+.build-terminal .terminal-status {
   color: #b4c7db;
   font-size: 11px;
 }
@@ -1003,7 +1145,7 @@ svg {
   display: grid;
   justify-items: start;
   gap: 7px;
-  min-height: 154px;
+  min-height: 172px;
   align-content: center;
   padding: 23px clamp(19px, 3vw, 36px);
   color: var(--muted);
@@ -1020,6 +1162,10 @@ svg {
   font-size: 19px;
   font-weight: 730;
   letter-spacing: -0.025em;
+}
+
+.empty-state .button {
+  margin-top: 4px;
 }
 
 .empty-state p {
@@ -1040,11 +1186,10 @@ svg {
 }
 
 .confirm-dialog::backdrop {
-  background: #0b17267d;
-  backdrop-filter: blur(4px);
+  background: #0b1726a0;
 }
 
-.dialog-symbol, .auth-success-icon, .session-symbol {
+.dialog-symbol, .auth-success-icon {
   display: grid;
   width: 45px;
   aspect-ratio: 1;
@@ -1053,6 +1198,11 @@ svg {
 }
 
 .dialog-symbol {
+  background: #e6eef4;
+  color: var(--accent);
+}
+
+.dialog-symbol[data-destructive="true"] {
   background: #f7e9e9;
   color: #8b2d39;
 }
@@ -1080,7 +1230,7 @@ svg {
 
 .auth-page {
   display: grid;
-  grid-template-columns: 1.1fr 1fr;
+  grid-template-columns: minmax(0, 0.94fr) minmax(0, 1fr);
   min-height: 100svh;
   background: #f7f9fa;
 }
@@ -1098,7 +1248,7 @@ svg {
 }
 
 .auth-story .cloudscape {
-  background-position: 57% 55%;
+  background-position: 57% 59%;
 }
 
 .auth-story .cloudscape::after {
@@ -1110,13 +1260,13 @@ svg {
 }
 
 .auth-story-content {
-  margin-block: clamp(80px, 15vh, 190px) 90px;
+  margin-block: clamp(64px, 14vh, 156px) 80px;
 }
 
 .auth-story h2 {
   margin: 0;
-  font-size: clamp(48px, 6.4vw, 108px);
-  font-weight: 700;
+  font-size: clamp(38px, 5.3vw, 84px);
+  font-weight: 600;
   line-height: 1.01;
   letter-spacing: -0.037em;
 }
@@ -1137,10 +1287,6 @@ svg {
   padding: 42px clamp(24px, 5vw, 90px);
 }
 
-.auth-mobile-brand {
-  display: none;
-}
-
 .auth-form-wrap {
   width: min(100%, 405px);
 }
@@ -1151,8 +1297,8 @@ svg {
 
 .auth-form-heading h1, .auth-success h1 {
   margin: 0 0 8px;
-  font-size: clamp(37px, 4vw, 58px);
-  font-weight: 720;
+  font-size: 2.75rem;
+  font-weight: 600;
   line-height: 1.02;
   letter-spacing: -0.035em;
 }
@@ -1167,16 +1313,8 @@ svg {
   overflow-wrap: anywhere;
 }
 
-.auth-form-eyebrow {
-  display: block;
-  margin-bottom: 6px;
-  color: #246044;
-  font-size: 13px;
-  font-weight: 680;
-}
-
-.auth-success-icon, .session-symbol {
-  margin-bottom: 14px;
+.auth-success-icon {
+  margin-bottom: 16px;
   background: #dceae3;
   color: #256748;
 }
@@ -1255,7 +1393,7 @@ svg {
   color: #754911;
 }
 
-.auth-submit, .session-screen button {
+.auth-submit {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1274,12 +1412,12 @@ svg {
   margin-top: 23px;
 }
 
-.auth-submit:hover, .session-screen button:hover {
+.auth-submit:hover {
   border-color: var(--accent-dark);
   background: var(--accent-dark);
 }
 
-.auth-submit:disabled, .session-screen button:disabled {
+.auth-submit:disabled {
   border-color: #496780;
   background: #496780;
 }
@@ -1329,17 +1467,14 @@ svg {
   text-align: center;
 }
 
-.session-symbol {
-  background: #dce7ef;
-  color: var(--accent);
-  font-size: 20px;
-  font-weight: 760;
+.session-screen .stratus-brand {
+  margin-bottom: 20px;
 }
 
 .session-screen h1 {
   font-size: 28px;
-  font-weight: 750;
-  letter-spacing: -0.05em;
+  font-weight: 600;
+  letter-spacing: -0.03em;
 }
 
 .session-screen p {
@@ -1350,8 +1485,8 @@ svg {
   color: var(--muted);
 }
 
-.session-screen button {
-  margin-top: 18px;
+.session-screen .button {
+  margin-top: 16px;
 }
 
 .auth-spin {
@@ -1392,7 +1527,7 @@ svg {
 
 @media (max-width: 760px) {
   :root {
-    --gutter: 18px;
+    --gutter: 16px;
   }
 
   .workspace-topbar {
@@ -1404,23 +1539,26 @@ svg {
   }
 
   .deploy-composer {
-    padding: 33px 22px 43px;
     min-height: 0;
-    border-radius: 15px;
+    padding: 20px;
+    border-radius: 12px;
   }
 
-  .deploy-composer .cloudscape {
-    left: 0;
-    background-position: 64% 76%;
+  .composer-art {
+    display: none;
   }
 
-  .deploy-composer .cloudscape::after {
-    background: linear-gradient(90deg, #0b111bf0, #0b111b91 75%);
-  }
-
-  .cloudscape-credit {
-    right: 9px;
-    bottom: 7px;
+  .deployment-back {
+    display: flex;
+    align-items: center;
+    width: 100%;
+    min-height: 44px;
+    padding-inline: var(--detail-gutter);
+    border-bottom: 1px solid var(--line);
+    gap: 8px;
+    color: var(--accent);
+    font-size: 14px;
+    text-align: left;
   }
 
   .deployment-grid {
@@ -1437,21 +1575,37 @@ svg {
 
   .auth-page {
     grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
   }
 
   .auth-story {
+    justify-content: center;
+    min-height: 96px;
+    padding: 20px 24px;
+  }
+
+  .auth-story .cloudscape {
+    left: 24%;
+    background-position: 67% 71%;
+  }
+
+  .auth-story .cloudscape::after {
+    background: linear-gradient(90deg, var(--night), transparent 75%);
+  }
+
+  .auth-story .cloudscape-credit {
+    right: 8px;
+    bottom: 8px;
+    font-size: 10px;
+  }
+
+  .auth-story-content {
     display: none;
   }
 
   .auth-main {
     align-content: start;
-    padding-top: 22px;
-  }
-
-  .auth-mobile-brand {
-    display: block;
-    justify-self: start;
-    margin-bottom: clamp(38px, 10vh, 85px);
+    padding-top: 32px;
   }
 }
 
@@ -1465,7 +1619,7 @@ svg {
   }
 
   .workspace-links a {
-    width: 42px;
+    width: 44px;
     padding: 0;
   }
 
@@ -1490,28 +1644,39 @@ svg {
     padding-top: 17px;
   }
 
-  .composer-intro h1 {
-    font-size: clamp(39px, 11.5vw, 54px);
+  .workspace-heading h1 {
+    font-size: 2.25rem;
   }
 
-  .composer-intro p {
-    margin-block: 12px 17px;
+  .workspace-heading {
+    margin-bottom: 12px;
   }
 
-  .deploy-composer .cloudscape {
-    background-position: 64% top;
-    background-size: auto 120%;
+  .workspace-jump {
+    display: none;
+  }
+
+  .composer-intro h2 {
+    font-size: 1.5rem;
+  }
+
+  .auth-form-heading h1, .auth-success h1 {
+    font-size: 2.25rem;
+  }
+
+  .section-title h2, .detail-title h3 {
+    font-size: 1.625rem;
   }
 
   .repository-field {
     display: grid;
     grid-template-columns: auto minmax(0, 1fr);
-    padding: 7px;
-    gap: 3px 7px;
+    padding: 4px;
+    gap: 4px 8px;
   }
 
-.repository-field > svg {
-    margin-left: 5px;
+  .repository-field > svg {
+    margin-left: 4px;
   }
 
   .repository-field .button {
@@ -1541,7 +1706,7 @@ svg {
   }
 
   .detail-actions {
-    gap: 6px;
+    gap: 8px;
   }
 
   .detail-actions .button {
