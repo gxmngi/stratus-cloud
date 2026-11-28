@@ -94,6 +94,51 @@ func TestMissingArtifactDoesNotConsumeProductionRevision(t *testing.T) {
 	}
 }
 
+func TestNestedArtifactSurvivesPreviewAndProductionRecovery(t *testing.T) {
+	workspace := t.TempDir()
+	deployment := filepath.Join(workspace, "dep-web")
+	output := filepath.Join(deployment, "code", "apps", "web", "public-output")
+	if err := os.MkdirAll(output, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("custom output"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deployment, "runtime.json"), []byte(`{"type":"static","artifactDir":"apps/web/public-output"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	proxy := &ProxyHandler{workspaceBase: workspace, routes: make(map[string]*RouteEntry)}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-web","type":"static","revision":1}`, "project")
+	for _, host := range []string{"dep-web", "project"} {
+		response := httptest.NewRecorder()
+		proxy.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://"+host+".localhost/", nil))
+		if response.Code != http.StatusOK || response.Body.String() != "custom output" {
+			t.Fatalf("%s did not serve the custom output: %d %q", host, response.Code, response.Body.String())
+		}
+	}
+	if err := os.WriteFile(filepath.Join(deployment, "runtime.json"), []byte(`{"type":"static","artifactDir":"../code/apps/web/public-output"}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if route := proxy.createStaticRouteEntry("bad", "dep-web"); route != nil {
+		t.Fatal("accepted an invalid artifact path")
+	}
+}
+
+func TestDeletedProductionAliasDoesNotRecoverFromStaleUpdates(t *testing.T) {
+	proxy := &ProxyHandler{workspaceBase: t.TempDir(), routes: make(map[string]*RouteEntry)}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"revision":1}`, "project")
+	proxy.applyProductionRoutePayload(`{"action":"delete","subdomain":"project","revision":2}`, "project")
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-a","type":"dynamic","port":3000,"revision":1}`, "project")
+	if route := proxy.GetRoute("project"); route != nil {
+		t.Fatalf("deleted production URL still has a route: %v", route)
+	}
+	proxy.applyProductionRoutePayload(`{"subdomain":"project","aliasOf":"dep-b","type":"dynamic","port":4000,"revision":3}`, "project")
+	proxy.applyProductionRoutePayload(`{"action":"delete","subdomain":"project","revision":2}`, "project")
+	if route := proxy.GetRoute("project"); route == nil || route.Port != 4000 {
+		t.Fatalf("new production URL should survive a stale delete: %v", route)
+	}
+}
+
 func TestScaleToZeroRequiresOptIn(t *testing.T) {
 	t.Setenv("ENABLE_SCALE_TO_ZERO", "")
 	t.Setenv("DISABLE_SCALE_TO_ZERO", "")

@@ -1,240 +1,92 @@
 # Stratus Cloud
 
-<p align="left">
-  <img src="https://img.shields.io/badge/Next.js-16-black?style=flat-square&logo=next.js" alt="Next.js 16" />
-  <a href="https://github.com/gxmngi/stratus-cloud/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/gxmngi/stratus-cloud/ci.yml?branch=main&style=flat-square&logo=githubactions&logoColor=white" alt="CI" /></a>
-  <img src="https://img.shields.io/badge/Go-1.22+-00ADD8?style=flat-square&logo=go&logoColor=white" alt="Go" />
-  <img src="https://img.shields.io/badge/Docker-Sandbox-2496ED?style=flat-square&logo=docker&logoColor=white" alt="Docker" />
-  <img src="https://img.shields.io/badge/Redis-Pub%2FSub-DC382D?style=flat-square&logo=redis&logoColor=white" alt="Redis" />
-  <img src="https://img.shields.io/badge/TypeScript-5.0-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript" />
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-gray?style=flat-square" alt="License" /></a>
-</p>
+**Build, preview, and deploy web apps on your own infrastructure.**
 
-> A lightweight, self-hosted Cloud Deployment Platform (Mini-Vercel / PaaS) built from scratch with Next.js 16, Go, Docker, and Redis.
+Stratus Cloud is a self-hosted deployment platform for static sites and Node.js
+servers. Give it a Git repository. It builds the project in Docker, streams the
+build logs, and gives each successful release a preview URL.
 
-![Stratus Cloud Dashboard](assets/dashboard-preview.png)
+[Run locally](#run-locally) · [Install on Linux](docs/linux-compose-install.md) ·
+[How it works](#how-it-works) · [Run the checks](#run-the-checks) ·
+[CI](https://github.com/gxmngi/stratus-cloud/actions/workflows/ci.yml)
 
-Stratus Cloud is an educational, production-modeled Platform-as-a-Service (PaaS). It automates the entire lifecycle of web applications: pulling Git repositories, executing isolated builds inside ephemeral Docker containers, streaming compilation logs in real time to the browser, and serving deployments through a high-performance Go reverse proxy with dynamic subdomain routing.
+![Stratus deployment workspace with release history, a selected preview, release actions, and build logs](assets/dashboard-preview.png)
 
----
+*Workspace screenshot using sample deployments.*
 
-## Key Architectural Highlights
+## Deploy and manage releases
 
-* **Polyglot Monorepo Design:** Clean separation of concerns featuring a Next.js 16 UI, a TypeScript Builder & Orchestrator, and a high-performance edge proxy written in Go.
-* **Isolated Ephemeral Sandboxes & Linux Security Hardening:** Every build executes inside a throwaway Docker container (`node:22-alpine`) with strict resource constraints (1GB RAM, 1GB Swap, 1.0 CPU quota, `PidsLimit: 256` fork-bomb defense), root capability dropping (`CapDrop: ['ALL']`), and `no-new-privileges:true` kernel execution fences.
-* **Intelligent Package Manager Auto-Detection:** Inspects project root files on the fly and dynamically switches between `pnpm`, `yarn`, `bun`, and `npm` without requiring manual configuration.
-* **In-Memory Go Edge Proxy & Dynamic Cache Invalidation:** Sub-millisecond $O(1)$ in-memory routing table with pre-warmed connection pools and zero-disk per-request I/O. Supports instant hot-reloading via Redis Pub/Sub (`proxy:routes`) and internal REST control planes.
-* **Production Aliases & Rollback:** Promote previews and roll back from the dashboard. The proxy reconciles the saved route revision after restart or Redis reconnect.
-* **Automated Container Readiness Probes & Failure Defense:** Ephemeral and dynamic runtime containers undergo active TCP and HTTP readiness probing before routing. Crashed containers are isolated and aborted before reaching production.
-* **Live Container Resource Telemetry & Observability:** Real-time container resource monitoring (CPU load percentage, resident memory footprint with cache subtraction, process table utilization vs limits, network I/O, and container uptime) polled directly into the Next.js dashboard.
-* **Deployment Lifecycle & Garbage Collection:** Complete teardown engine ensuring zero leaked resources. Shuts down runtime Docker containers, unbinds host ports, purges in-memory proxy routes via Redis Pub/Sub, reclaims workspace disk storage, and safely cascades SQLite records while guarding active production deployments against accidental deletion.
-* **At-Least-Once Resilient Job Pipeline:** Task ingestion powered by Redis Streams (`XADD`/`XREADGROUP`) with consumer groups, automatic crash recovery (`XAUTOCLAIM`), and 15-minute container execution timeout fencing.
-* **Decoupled Real-Time Log Pipeline:** Completely separates build workers from web clients using Redis Pub/Sub channels and WebSockets, streaming container `stdout`/`stderr` line-by-line directly to an embedded `xterm.js` terminal emulator.
+| Task | What Stratus does |
+| --- | --- |
+| Check a repository | For a public GitHub repository, check the selected folder before queuing. The workspace shows the detected framework, build command, and output folder when available. |
+| Configure a build | Choose the project folder, override the build command or output folder, and add environment variables for a manual deploy. |
+| Review a release | Open its preview URL and inspect live or saved build logs. Node.js deployments also show runtime metrics when available. |
+| Update production | The first successful deployment sets the production URL. Promote a later preview to that URL or roll back to the previous release. |
+| Automate or clean up | Configure a GitHub push webhook to queue deployments. Delete an individual preview or remove an entire project and its deployments. |
 
----
+Flutter Web builds that require the Flutter SDK are currently unsupported.
 
-## Distributed System Architecture
+## Run locally
 
-<p align="center">
-  <img src="assets/architecture.svg" alt="Stratus Cloud Architecture" width="100%" />
-</p>
+Install Git, Node.js 22, Go 1.27.4 or later, and Docker Desktop with Linux
+containers. Run these commands from the repository root.
 
-<details>
-<summary><b>View Architecture Execution Pipeline Breakdown</b></summary>
-
-### Sequential Execution Matrix
-
-| Stage | Source → Target | Action | Transport / Protocol |
-| :--- | :--- | :--- | :--- |
-| **1. Ingest** | `apps/web` → `services/api` | Dispatches deployment trigger | HTTP POST (`/api/deploy`) |
-| **2. Enqueue** | `services/api` → Redis | Pushes task to resilient Stream | Redis Stream `XADD stream:build` |
-| **3. Dequeue** | Redis → `services/builder` | Worker pulls task via consumer group with auto-claim recovery | Redis `XREADGROUP` / `XAUTOCLAIM` |
-| **4. Sandbox** | `services/builder` → Docker | Provisions hardened ephemeral container (CapDrop, PidsLimit) | Docker Engine API (`node:22-alpine`) |
-| **5. Stream** | Docker → Redis Pub/Sub | Publishes real-time build logs | Redis `PUBLISH logs:<id>` |
-| **6. Relay** | Redis Pub/Sub → `apps/web` | Forwards log stream to UI | WebSockets (`ws://localhost:4000`) |
-| **7. Register** | `services/builder` → Edge Proxy | Registers dynamic route in-memory & broadcasts invalidation | Redis Pub/Sub `proxy:routes` & REST API |
-| **8. Serve** | Client → `services/proxy` | Resolves preview & production alias traffic from in-memory cache | Go Reverse Proxy (`:8000`) |
-
-### Topology Flowchart
-
-```mermaid
-flowchart LR
-    subgraph UI ["01. Control Plane & UI"]
-        Dev["User Browser<br/>(localhost:3000)"]
-        Dash["Next.js 16 Dashboard<br/>(xterm.js Terminal)"]
-        API["API Gateway<br/>(Port 4000)"]
-        Dev --> Dash
-        Dash -->|"1. POST /deploy"| API
-    end
-
-    subgraph Broker ["02. Message Bus & Isolation"]
-        RedisStream[("Redis Stream<br/>stream:build")]
-        Docker["Docker Sandbox<br/>(Hardened node:22-alpine)"]
-        RedisPubSub[("Redis Pub/Sub<br/>logs:id & proxy:routes")]
-        RedisStream -->|"3. Consumer Group"| Docker
-        Docker -.->|"4. Stream Logs"| RedisPubSub
-    end
-
-    subgraph Edge ["03. Edge Network & In-Memory Routing"]
-        Dist[("Build Artifacts<br/>dist/ directory")]
-        GoProxy["Go Reverse Proxy<br/>(In-Memory Cache, Port 8000)"]
-        App["Live Application<br/>(*.localhost:8000)"]
-        RedisPubSub -.->|"5. Invalidation Event"| GoProxy
-        Dist --> GoProxy
-        GoProxy --> App
-    end
-
-    API -->|"2. XADD Stream"| RedisStream
-    RedisPubSub -.->|"WebSocket Stream"| Dash
-    Docker -->|"6. Output Dist"| Dist
-```
-
-</details>
-
----
-
-## Repository Structure
-
-```text
-stratus-cloud/
-├── apps/
-│   └── web/              # Next.js 16 Developer Dashboard with xterm.js
-├── services/
-│   ├── api/              # REST Orchestrator API & WebSocket Gateway (Node/TS)
-│   ├── builder/          # Hardened Docker Sandbox Build Engine (Dockerode + Redis Streams)
-│   └── proxy/            # High-Performance In-Memory Edge Reverse Proxy (Go)
-├── fixtures/
-│   └── demo-app/         # Minimal, zero-bloat test application
-└── assets/               # Architecture diagrams and preview assets
-```
-
----
-
-## Getting Started
-
-### Prerequisites
-* [Node.js](https://nodejs.org/) v22+
-* [Go](https://go.dev/) v1.27.4+
-* [Docker Desktop](https://www.docker.com/products/docker-desktop/) (Engine running)
-* [Git](https://git-scm.com/)
-
-### Install service dependencies (first run)
-
-```powershell
+```bash
 npm --prefix services/api ci
 npm --prefix services/builder ci
 npm --prefix apps/web ci
-```
-
-### Start the complete local stack
-
-From the repository root:
-
-```powershell
 npm run dev
 ```
 
-The launcher checks Docker's Linux engine, prepares an isolated Redis container,
-starts builder, proxy, API and web, and uses the separate development database.
-It binds the local services to loopback and does not delete existing Docker data.
-If an older Stratus stack owns ports 3000, 4000 or 8000, stop it before launching.
-Press Ctrl+C to stop the local processes; the managed Redis container remains
-available and restarts with Docker Desktop.
+1. Open the [local sign-in page](http://localhost:3000/login). Use
+   `alice@example.test` and `Stratus local Alice demo 2026` for this local
+   development instance.
+2. Choose **Static site** to fill in `fixtures/demo-app`. Select **Deploy project**.
+3. Wait for **Ready**, then open the **Preview** link in the selected release.
+   Choose **Node.js server** to try a deployment with a running server.
 
-Open [http://localhost:3000/login](http://localhost:3000/login) and sign in with
-`alice@example.test` / `Stratus local Alice demo 2026`. Enter `fixtures/demo-app`,
-click **Deploy**, then open its preview after the build becomes READY.
-These are local development credentials; keep this mode on your own machine.
+The local launcher uses a dedicated development database. Open the
+[local deployment guide](docs/local-deployment.md) for service ports and
+troubleshooting. To work on sign-in or the dashboard without Docker, use
+`npm run dev:auth`.
 
-For login UI work without Docker, use `npm run dev:auth` from the root instead.
-That mode disables deployment actions. See [Local deployment](docs/local-deployment.md)
-for lifecycle verification and troubleshooting.
+## How it works
 
-### Verify real deployment, promotion and rollback
-
-With the complete stack running, open another terminal at the root:
-
-```powershell
-npm run test:deploy
+```mermaid
+flowchart LR
+    Dashboard["Next.js dashboard"] -->|"Deploy request"| API["Node.js API"]
+    API -->|"Queue job"| Redis["Redis"]
+    API --- SQLite["SQLite"]
+    Redis -->|"Build job"| Builder["Docker builder"]
+    Builder -->|"Logs via Redis"| API
+    API -->|"WebSocket logs"| Dashboard
+    Builder -->|"Static files or Node.js runtime"| Proxy["Go edge proxy"]
+    Proxy --> Preview["Preview and production URLs"]
 ```
 
-The check builds two distinct static releases, checks their served content,
-verifies owner isolation, promotes and rolls back the project alias, then removes
-the superseded preview while preserving the active deployment.
+- [Dashboard](apps/web) handles sign-in, repository checks, release management, and logs.
+- [API](services/api) owns sessions, deployment records, and production aliases.
+- [Builder](services/builder) builds in Docker and starts Node.js runtimes.
+- [Proxy](services/proxy) serves static files and forwards requests to Node.js apps.
 
-To run the published images on a Linux host, follow the
-[Linux Compose installation guide](docs/linux-compose-install.md).
+See [Linux installation](docs/linux-compose-install.md) for published images,
+HTTPS, GitHub webhooks, and dependency caches. See [build recovery](docs/build-recovery.md)
+for worker recovery and retry behavior. The [interface guide](docs/interface-design.md) describes the workspace controls and browser checks.
 
-### Verify worker and API crash recovery
+## Run the checks
 
-```powershell
-npm run test:recovery
-```
+| Command | Coverage |
+| --- | --- |
+| `npm --prefix apps/web run lint` and `npm --prefix apps/web run build` | Dashboard lint, types, and production build |
+| `npm --prefix apps/web run test:e2e` | Browser checks for auth, repository validation, workspace controls, and accessibility |
+| `npm --prefix services/api test` and `npm --prefix services/builder test` | API and builder tests |
+| `go -C services/proxy test ./...` | Go proxy tests |
+| `npm run test:deploy` and `npm run test:workspace` | Real Docker builds, previews, and changes to the production alias |
 
-This isolated Docker check kills a worker mid-build and redelivers its finished
-job to confirm the runtime is preserved. It also stops the API during a separate
-build, then checks that the restarted API reports READY and the preview serves
-the expected content. See [Build recovery](docs/build-recovery.md) for prerequisites,
-retry policy and recovery limits.
-
----
-
-## Engineering Design Decisions
-
-| Subsystem | Technology | Architectural Rationale |
-| :--- | :--- | :--- |
-| **Edge Reverse Proxy** | **Go (`net/http`)** | Sub-millisecond latency, in-memory $O(1)$ lock-free read route cache, pre-warmed connection pools, real-time cache invalidation via Redis Pub/Sub, zero third-party dependencies. Hardened with path traversal guards and production HTTP timeouts. |
-| **Production Aliases & Rollback** | **SQLite + Redis** | SQLite stores the desired release and revision. The proxy reloads stored revisions and applies newer selections to the production URL. |
-| **Readiness Probes & Health** | **Node.js HTTP/TCP & Docker Engine** | Active HTTP/TCP readiness probing cycle before declaring deployments READY. Prevents crashed containers from being routed and ensures graceful failure handling. |
-| **Resource Telemetry** | **Docker Engine API (`dockerode`)** | Extracts live CPU load, resident memory usage (with page cache subtraction), PIDs quota consumption, network I/O, and container uptime via non-streaming stats snapshots. |
-| **Deployment Teardown & GC** | **Node.js + Dockerode + Redis Pub/Sub** | Safe multi-stage resource reclamation (container stop/remove, Redis route eviction, workspace disk purge, SQLite cascade delete) with active production deployment locks. |
-| **Resilient Task Pipeline** | **Redis Streams (`stream:build`)** | Replaced fragile `BLPOP` queues with persistent consumer groups. Guarantees at-least-once execution with `XACK`, automatic orphaned job recovery (`XAUTOCLAIM`), and 15m container execution fencing. |
-| **Sandbox Execution** | **Hardened Docker Engine API** | Complete container isolation for untrusted user code. Enforces 1GB RAM limits, `PidsLimit: 256`, `CapDrop: ['ALL']`, `no-new-privileges: true`, bounded swap, and host credential environment blocklist. |
-| **Message Broker & Logs** | **Redis (Streams + Pub/Sub)** | Decouples the build worker fleet from the WebSocket gateway. Allows independent horizontal scaling of workers across multiple machines. |
-| **Developer Dashboard** | **Next.js 16 + xterm.js** | Server-side rendering paired with client-side interactive terminal emulator via WebSockets for raw container `stdout`/`stderr` streaming and 1-click blue-green promotion. |
-
----
-
-## Security Guardrails
-
-1. **Kernel Privilege & Capability Dropping:** Build and runtime containers drop all root Linux capabilities (`CapDrop: ['ALL']`) with `no-new-privileges: true` set to prevent container escape and privilege escalation.
-2. **Fork-Bomb & Resource Denial Mitigation:** Enforces strict process table quotas (`PidsLimit: 256` for builder containers, `512` for long-lived runtime services), 1.0 CPU quota, 1GB RAM, and 1GB Swap to prevent noisy neighbor starvation.
-3. **Host Credential Leakage Guard:** Dynamic environment sanitizer filters out sensitive system environment variables (`AWS_*`, `TOKEN*`, `SECRET*`, `DOCKER_*`) before injecting user configurations into untrusted containers.
-4. **Execution Timeout Guard:** Ephemeral builder containers are actively monitored with a 15-minute watchdog timer; hung or unresponsive build processes are forcibly aborted and cleaned up.
-5. **Path Traversal Shield:** The Go Edge Proxy verifies that all requested static assets resolve strictly within the deployment's `dist/` directory via `filepath.Rel()`. Any attempt to escape the directory is denied with HTTP 403.
-6. **Subdomain Strict Regex:** Subdomains are sanitized with `^[a-zA-Z0-9_-]+$` preventing injection of directory traversal separators in the `Host` header.
-7. **Slowloris & Timeout Protection:** The HTTP server configures strict `ReadHeaderTimeout`, `ReadTimeout`, `WriteTimeout`, and `IdleTimeout` bounds to mitigate socket exhaustion attacks.
-
----
-
-## Running Tests
-
-For authentication setup, development accounts, existing-data migration and the
-login UI contract, see [Authentication readiness](docs/auth-readiness.md).
-
-Use Node.js 22 for the API and builder test suites, matching their CI jobs.
-Install dependencies with `npm ci` inside each service before the first run.
-
-```powershell
-cd services/api
-npm test
-
-cd ../builder
-npm test
-
-cd ../proxy
-go test ./...
-```
-
-The API test command configures a separate temporary SQLite database and workspace
-for each test process before loading application modules. These temporary files
-are removed after the tests. Use `npm test` so database tests do not use the
-application's normal data directory.
-
-GitHub Actions runs the API and builder suites alongside the dashboard build and
-Go proxy tests. These service tests do not cover the complete deployment flow;
-end-to-end deployment tests are a separate next step.
+Before the first browser run, install Chromium with `npm --prefix apps/web exec -- playwright install chromium`.
+Follow the [local deployment guide](docs/local-deployment.md) to run the Docker
+checks against a local stack.
 
 ## License
 
-Distributed under the [MIT License](LICENSE). Maintained by [Rusdan Lamsa (@gxmngi)](https://github.com/gxmngi).
+[MIT](LICENSE). Maintained by [Rusdan Lamsa (@gxmngi)](https://github.com/gxmngi).

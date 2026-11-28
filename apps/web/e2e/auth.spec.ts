@@ -8,7 +8,7 @@ const alice = {
 async function openLogin(page: Page) {
   await page.goto("/login");
   await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
+    page.getByRole("heading", { name: "Sign in to Stratus" }),
   ).toBeVisible();
 }
 async function login(page: Page) {
@@ -27,7 +27,7 @@ test("private workspace redirects to sign in without showing private content", a
   await page.goto("/");
   await expect(page).toHaveURL(/\/login$/);
   await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
+    page.getByRole("heading", { name: "Sign in to Stratus" }),
   ).toBeVisible();
   await expect(
     page.getByText("Deployment History", { exact: true }),
@@ -111,7 +111,7 @@ test("registration validates a passphrase, handles duplicates and creates an acc
 }) => {
   await page.goto("/register");
   await expect(
-    page.getByRole("heading", { name: "Start building." }),
+    page.getByRole("heading", { name: "Create an account" }),
   ).toBeVisible();
   await page.getByLabel("Email address").fill(alice.email);
   await page.getByLabel("Password", { exact: true }).fill("short");
@@ -133,12 +133,12 @@ test("registration validates a passphrase, handles duplicates and creates an acc
     .getByRole("button", { name: "Create account", exact: true })
     .click();
   await expect(
-    page.getByRole("heading", { name: "Your workspace is one sign-in away." }),
+    page.getByRole("heading", { name: "Account created" }),
   ).toBeVisible();
   await expect(page.getByLabel("Password", { exact: true })).toHaveCount(0);
   await page.getByRole("link", { name: "Continue to sign in" }).click();
   await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
+    page.getByRole("heading", { name: "Sign in to Stratus" }),
   ).toBeVisible();
 });
 
@@ -247,7 +247,7 @@ test("switching accounts removes the previous account’s deployment state", asy
   ).toBeVisible();
   await page.getByRole("button", { name: "Sign out", exact: true }).click();
   await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
+    page.getByRole("heading", { name: "Sign in to Stratus" }),
   ).toBeVisible();
   await page.getByLabel("Email address").fill("bob@example.test");
   await page
@@ -270,12 +270,12 @@ test("session service errors offer a retry without a redirect loop", async ({
   await page.route("**/api/auth/me", (route) => route.abort());
   await page.goto("/login");
   await expect(
-    page.getByRole("heading", { name: "We couldn’t connect." }),
+    page.getByRole("heading", { name: "Could not connect" }),
   ).toBeVisible();
   await page.unroute("**/api/auth/me");
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(
-    page.getByRole("heading", { name: "Welcome back." }),
+    page.getByRole("heading", { name: "Sign in to Stratus" }),
   ).toBeVisible();
 });
 
@@ -297,6 +297,14 @@ test("login and registration pass automated accessibility checks", async ({
     path: "test-results/login-desktop.png",
     fullPage: true,
   });
+});
+
+test("an unknown route offers a way back to the workspace", async ({ page }) => {
+  const response = await page.goto("/unknown-stratus-route");
+  expect(response?.status()).toBe(404);
+  await expect(page.getByRole("heading", { name: "Page not found" })).toBeVisible();
+  await page.getByRole("link", { name: "Back to workspace" }).click();
+  await expect(page.getByRole("heading", { name: "Sign in to Stratus" })).toBeVisible();
 });
 
 test("mobile layout has no horizontal overflow and works with reduced motion", async ({

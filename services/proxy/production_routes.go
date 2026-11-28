@@ -14,6 +14,7 @@ const (
 )
 
 type productionRoute struct {
+	Action    string    `json:"action"`
 	Subdomain string    `json:"subdomain"`
 	AliasOf   string    `json:"aliasOf"`
 	Type      RouteType `json:"type"`
@@ -53,8 +54,10 @@ func (p *ProxyHandler) applyProductionRoutePayload(payload, expectedSlug string)
 }
 
 func (p *ProxyHandler) applyProductionRoute(route productionRoute) bool {
-	if route.Revision == nil || !subdomainRegex.MatchString(route.Subdomain) ||
-		!subdomainRegex.MatchString(route.AliasOf) {
+	if route.Revision == nil || !subdomainRegex.MatchString(route.Subdomain) {
+		return false
+	}
+	if route.Action != "delete" && !subdomainRegex.MatchString(route.AliasOf) {
 		return false
 	}
 	revision := *route.Revision
@@ -70,14 +73,18 @@ func (p *ProxyHandler) applyProductionRoute(route productionRoute) bool {
 	}
 
 	var entry *RouteEntry
-	switch route.Type {
-	case RouteTypeDynamic:
-		if route.Port < 1 || route.Port > 65535 {
-			return false
+	if route.Action == "delete" {
+		entry = &RouteEntry{Subdomain: route.Subdomain, productionDeleted: true}
+	} else {
+		switch route.Type {
+		case RouteTypeDynamic:
+			if route.Port < 1 || route.Port > 65535 {
+				return false
+			}
+			entry = p.createDynamicRouteEntry(route.Subdomain, route.Port, route.AliasOf, route.Networked)
+		case RouteTypeStatic:
+			entry = p.createStaticRouteEntry(route.Subdomain, route.AliasOf)
 		}
-		entry = p.createDynamicRouteEntry(route.Subdomain, route.Port, route.AliasOf, route.Networked)
-	case RouteTypeStatic:
-		entry = p.createStaticRouteEntry(route.Subdomain, route.AliasOf)
 	}
 	if entry == nil {
 		return false

@@ -6,7 +6,7 @@ import Redis from 'ioredis';
 import { setSecretMasker, clearSecretMasker, maskSecrets } from './mask';
 import { findAvailablePort } from './port-allocator';
 import { waitForContainerReadiness } from './health';
-import { resolveDeploymentWorkspace } from './workspace';
+import { resolveBuildDirectory, resolveDeploymentWorkspace, resolveProjectFolder } from './workspace';
 import { reservedRuntimePorts } from './runtime-ports';
 import { createRuntimeContainer, formatBuildEnvironment, NODE_IMAGE, resolveStartCommand, RUNTIME_PORT } from './runtime';
 import { resolveBuildPlan } from './build-command';
@@ -44,6 +44,7 @@ export interface BuildOptions {
     commitSha?: string;
     buildCommand?: string;
     startCommand?: string;
+    rootDirectory?: string;
     outputDir?: string;
     env?: Record<string, string>;
 }
@@ -187,8 +188,14 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
     }
 
     // Step 2: Auto-detect Build Command
+    const app = resolveBuildDirectory(codeDir, options.rootDirectory);
+    if (!app) {
+        return { success: false, exitCode: 1, artifactPath: null, error: 'Project folder does not exist inside the repository.' };
+    }
+    const { directory: appDir, workingDirectory } = app;
     const { formattedEnv, secretValues } = formatBuildEnvironment(options.env);
-    const { command: effectiveBuildCommand, cache } = resolveBuildPlan(codeDir, {
+    const { command: effectiveBuildCommand, cache } = resolveBuildPlan(appDir, {
+        repositoryDirectory: codeDir,
         customCommand: customBuildCommand,
         projectId: options.projectId,
         hasBuildEnvironment: formattedEnv.length > 0,
@@ -213,7 +220,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'build' },
             Image: NODE_IMAGE,
             Cmd: ['sh', '-c', effectiveBuildCommand],
-            WorkingDir: '/app',
+            WorkingDir: workingDirectory,
             Env: formattedEnv, // <-- ฉีด Environment Variables เข้าไปใน Container
             HostConfig: {
                 Binds: [`${hostMountPath}:/app`],
@@ -290,28 +297,18 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
     }
 
     // Step 7: Detect Runtime Type (Static Site vs Dynamic Container)
-    const possibleDirs = customOutputDir 
-        ? [path.join(codeDir, customOutputDir)]
-        : [
-            path.join(codeDir, 'dist'),
-            path.join(codeDir, 'build'),
-            path.join(codeDir, 'out'),
-            path.join(codeDir, '.next'),
-        ];
-
     await assertLease();
-    const detectedDir = possibleDirs.find((dir) => fs.existsSync(dir));
-    const isStaticApp = detectedDir && (
-        fs.existsSync(path.join(detectedDir, 'index.html')) || 
-        detectedDir.endsWith('.next')
-    );
+    const candidates = customOutputDir ? [customOutputDir] : ['dist', 'build', 'out'];
+    const detectedDir = candidates.map(candidate => resolveProjectFolder(appDir, candidate))
+        .find((folder): folder is string => Boolean(folder && folder !== appDir && fs.existsSync(path.join(folder, 'index.html'))));
 
     // Case A: Static Site Deployment
-    if (result.StatusCode === 0 && isStaticApp && detectedDir) {
+    if (result.StatusCode === 0 && detectedDir) {
         const generatedFiles = fs.readdirSync(detectedDir);
+        const artifactDir = path.relative(fs.realpathSync(codeDir), detectedDir).split(path.sep).join('/');
         fs.writeFileSync(
             path.join(workspaceDir, 'runtime.json'),
-            JSON.stringify({ type: 'static', updatedAt: Date.now() }, null, 2)
+            JSON.stringify({ type: 'static', artifactDir, updatedAt: Date.now() }, null, 2)
         );
 
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Static build succeeded`);
@@ -327,7 +324,10 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
     }
 
     // Case B: Dynamic Application Container Deployment
-    const startCmd = resolveStartCommand(codeDir, options.startCommand);
+    if (result.StatusCode === 0 && customOutputDir) {
+        return { success: false, exitCode: 1, artifactPath: null, error: 'The output folder does not contain index.html.' };
+    }
+    const startCmd = resolveStartCommand(appDir, options.startCommand);
     if (result.StatusCode === 0 && startCmd) {
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Detected dynamic server application`);
         await emitLog(deploymentId, `[INFO] [${deploymentId}] Launching application container: "${startCmd}"`);
@@ -342,7 +342,7 @@ async function runBuildInner(options: BuildOptions, assertLease: () => Promise<v
             await assertLease();
             runContainer = await createRuntimeContainer(docker, {
                 deploymentId, image: NODE_IMAGE, startCommand: startCmd, formattedEnv,
-                hostCodeDir: hostMountPath, port, network: runtimeNetwork,
+                hostCodeDir: hostMountPath, port, network: runtimeNetwork, workingDirectory,
             });
 
             const runStream = await runContainer.attach({

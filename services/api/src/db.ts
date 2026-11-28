@@ -90,6 +90,11 @@ export function initDatabase() {
         CREATE INDEX IF NOT EXISTS idx_deployment_deletions_pending ON deployment_deletions(deployment_id)
             WHERE completed_at IS NULL;
 
+        CREATE TABLE IF NOT EXISTS deleted_production_routes (
+            slug TEXT PRIMARY KEY,
+            revision INTEGER NOT NULL
+        );
+
         CREATE INDEX IF NOT EXISTS idx_deployments_created_at ON deployments(created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_deployments_project ON deployments(project_id);
         CREATE INDEX IF NOT EXISTS idx_deployments_pending ON deployments(id)
@@ -169,6 +174,12 @@ export interface ProductionRoute {
     revision: number;
 }
 
+export interface ProductionRouteRemoval {
+    subdomain: string;
+    revision: number;
+    action: 'delete';
+}
+
 export type DeploymentBuildOutcome = (
     | { status: 'READY'; runtimeType: 'static'; port: null }
     | { status: 'READY'; runtimeType: 'dynamic'; port: number; networked?: boolean }
@@ -183,7 +194,9 @@ export const dbService = {
                 const parts = gitUrl.replace(/\.git$/, '').split(/[\\/]/);
                 const name = parts[parts.length - 1] || 'unnamed-project';
                 const slug = name.toLowerCase().replace(/[^a-z0-9_-]/g, '-').replace(/^-+|-+$/g, '') || 'app';
-                db.prepare('UPDATE projects SET slug = ? WHERE id = ?').run(slug, existing.id);
+                db.prepare(`UPDATE projects SET slug = ?, production_route_revision = MAX(production_route_revision,
+                    COALESCE((SELECT revision FROM deleted_production_routes WHERE slug = ?), 0))
+                    WHERE id = ?`).run(slug, slug, existing.id);
                 existing.slug = slug;
             }
             return existing;
@@ -203,9 +216,9 @@ export const dbService = {
         const now = Date.now();
 
         db.prepare(`
-            INSERT INTO projects (id, name, slug, git_url, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
-        `).run(id, name, slug, gitUrl, now, now);
+            INSERT INTO projects (id, name, slug, git_url, created_at, updated_at, production_route_revision)
+            VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT revision FROM deleted_production_routes WHERE slug = ?), 0))
+        `).run(id, name, slug, gitUrl, now, now, slug);
 
         return { id, name, slug, git_url: gitUrl, created_at: now, updated_at: now };
     },
@@ -289,6 +302,17 @@ export const dbService = {
             WHERE p.slug IS NOT NULL AND d.status = 'READY' AND (? IS NULL OR p.slug = ?)
         `).all(slug ?? null, slug ?? null) as (Omit<ProductionRoute, 'networked'> & { networked: number })[];
         return routes.map(route => ({ ...route, networked: route.networked === 1 }));
+    },
+
+    getProductionRouteRemovals(slug?: string): ProductionRouteRemoval[] {
+        return db.prepare(`
+            SELECT r.slug AS subdomain, r.revision, 'delete' AS action
+            FROM deleted_production_routes r
+            WHERE (? IS NULL OR r.slug = ?) AND NOT EXISTS (
+                SELECT 1 FROM projects p JOIN deployments d ON d.id = p.production_deployment_id
+                WHERE p.slug = r.slug AND p.production_route_revision > r.revision AND d.status = 'READY'
+            )
+        `).all(slug ?? null, slug ?? null) as ProductionRouteRemoval[];
     },
 
     createDeployment(record: Omit<DeploymentRecord, 'duration_ms' | 'completed_at'>): void {

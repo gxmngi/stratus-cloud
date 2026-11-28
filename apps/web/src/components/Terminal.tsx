@@ -1,20 +1,31 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Terminal as XTerminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import { API_URL, apiFetch, logStreamUrl } from "@/lib/api";
 
 interface TerminalProps {
   deploymentId: string;
+  building: boolean;
   onStatusChange?: (status: "QUEUED" | "BUILDING" | "READY" | "FAILED") => void;
 }
 
 export default function Terminal({
   deploymentId,
+  building,
   onStatusChange,
 }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
+  const [history, setHistory] = useState<"loading" | "empty" | "saved" | "error">("loading");
+  const [stream, setStream] = useState<"connecting" | "live" | "offline">("connecting");
+
+  const status = building && stream === "live" ? "Live"
+    : history === "loading" ? "Loading…"
+    : building && stream === "offline" ? "Live stream unavailable"
+    : history === "error" ? "Logs unavailable"
+    : history === "empty" ? "No logs yet"
+    : "Saved output";
 
   // ใช้ Ref เก็บ Callback เพื่อป้องกัน useEffect re-trigger เมื่อ Parent Component re-render
   const onStatusChangeRef = useRef(onStatusChange);
@@ -30,9 +41,9 @@ export default function Terminal({
 
     const term = new XTerminal({
       theme: {
-        background: "#152038",
-        foreground: "#cbd6e9",
-        cursor: "#58a6ff",
+        background: "#0e1724",
+        foreground: "#d7e4f1",
+        cursor: "#9bd0f9",
         selectionBackground: "#3b4252",
         black: "#8798b5",
         brightBlack: "#97a6be",
@@ -48,7 +59,7 @@ export default function Terminal({
       fontSize: 13,
       fontFamily:
         "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-      cursorBlink: true,
+      cursorBlink: false,
       convertEol: true,
       disableStdin: true,
       rows: 12,
@@ -62,9 +73,7 @@ export default function Terminal({
         term.resize(Math.max(16, Math.floor((width - 32) / 7.85)), 12);
     });
     resize.observe(terminalRef.current);
-    term.writeln(
-      `\x1b[36m[STRATUS]\x1b[0m Loading log buffer for \x1b[33m${deploymentId}\x1b[0m...`,
-    );
+
 
     let isSubscribed = true;
     let ws: WebSocket | null = null;
@@ -83,24 +92,20 @@ export default function Terminal({
       .then((data: { logs: string[] }) => {
         if (!isSubscribed) return;
 
-        if (data.logs && data.logs.length > 0) {
-          term.writeln("\x1b[90m--- PERSISTED LOG REPLAY START ---\x1b[0m");
-          for (const line of data.logs) {
-            term.write(line.endsWith("\n") ? line : line + "\r\n");
-          }
-          term.writeln("\x1b[90m--- PERSISTED LOG REPLAY END ---\x1b[0m\n");
+        const logs = data.logs ?? [];
+        setHistory(logs.length > 0 ? "saved" : "empty");
+        for (const line of logs) {
+          term.writeln(line.replace(/\r?\n$/, ""));
         }
 
         // 2. Connect to live WebSocket stream
         ws = new WebSocket(logStreamUrl(deploymentId));
 
-        ws.onopen = () => {
-          term.writeln(
-            "\x1b[32m[CONNECTED]\x1b[0m Live WebSocket stream connected to Redis Pub/Sub.\n",
-          );
-        };
+        ws.onopen = () => { if (isSubscribed) setStream("live"); };
 
         ws.onmessage = (event) => {
+          if (!isSubscribed) return;
+          setHistory("saved");
           const message = event.data as string;
           const output = /^\[(INFO|STATUS|LOGS|ERROR)\]/.test(message) && !message.endsWith("\n") ? message + "\n" : message;
           term.write(output.replace(/\r?\n/g, "\r\n"));
@@ -112,21 +117,15 @@ export default function Terminal({
           }
         };
 
-        ws.onerror = () => {
-          term.writeln(
-            `\x1b[90m[NOTE] Live stream closed or inactive (viewing static log history).\x1b[0m`,
-          );
-        };
-
-        ws.onclose = () => {
-          term.writeln("\x1b[90m[DISCONNECTED] Live log stream closed.\x1b[0m");
-        };
+        const disconnect = () => { if (isSubscribed) setStream("offline"); };
+        ws.onerror = disconnect;
+        ws.onclose = disconnect;
       })
       .catch((err) => {
-        if (isSubscribed)
-          term.writeln(
-            `\r\n[STRATUS] ${err instanceof Error ? err.message : "Logs unavailable"}`,
-          );
+        if (!isSubscribed) return;
+        setHistory("error");
+        setStream("offline");
+        term.writeln(err instanceof Error ? err.message : "Logs unavailable");
       });
 
     return () => {
@@ -141,9 +140,9 @@ export default function Terminal({
     <section className="build-terminal" aria-label="Build logs">
       <header>
         <span>
-          <span className="terminal-dot" /> Build logs
+          <span className="terminal-dot" data-live={building && stream === "live"} aria-hidden="true" /> Build logs
         </span>
-        <code>{deploymentId}</code>
+        <span className="terminal-status" role="status">{status}</span>
       </header>
       <div ref={terminalRef} className="terminal-content" />
     </section>

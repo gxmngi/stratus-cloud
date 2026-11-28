@@ -56,16 +56,104 @@ test("workspace search, environment fields and filters work", async ({
   );
 });
 
+test("repository preflight reports the build plan and blocks Flutter before queueing", async ({ page }) => {
+  await page.route("**/api/deploy/preflight", async (route) => {
+    const { gitUrl } = route.request().postDataJSON();
+    await route.fulfill({ json: gitUrl.includes("flutter") ? {
+      framework: "Flutter / Dart", buildCommand: null, outputDirectory: null,
+      message: "Flutter Web needs the Flutter SDK. Stratus does not build it yet.",
+    } : { framework: "Astro", buildCommand: "npm install && npm run build", outputDirectory: "dist" } });
+  });
+  const source = page.getByLabel("Git repository or local project path");
+  const deploy = page.getByRole("button", { name: "Deploy project", exact: true });
+  await source.fill("https://github.com/example/astro");
+  await expect(page.getByText("Astro", { exact: true })).toBeVisible();
+  await expect(page.getByText("npm install && npm run build", { exact: true })).toBeVisible();
+  await expect(deploy).toBeEnabled();
+  await source.fill("https://github.com/example/flutter");
+  await expect(deploy).toBeDisabled();
+  await expect(page.getByText(/Flutter Web needs the Flutter SDK/)).toBeVisible();
+  await expect(deploy).toBeDisabled();
+});
+
+test("a missing manifest leads to the project folder and rechecks it", async ({ page }) => {
+  await page.route("**/api/deploy/preflight", (route) => {
+    const { rootDirectory } = route.request().postDataJSON();
+    return route.fulfill({ json: rootDirectory === "apps/site"
+      ? { framework: "Vite", buildCommand: "npm run build", outputDirectory: "dist" }
+      : { framework: "Unknown", buildCommand: null, outputDirectory: null,
+          message: "No package.json in this folder. Choose the folder containing the application." },
+    });
+  });
+
+  await page.getByLabel("Git repository or local project path").fill("https://github.com/example/monorepo");
+  const deploy = page.getByRole("button", { name: "Deploy project" });
+  await expect(deploy).toBeDisabled();
+  await page.getByRole("button", { name: "Choose project folder" }).click();
+  const folder = page.getByRole("textbox", { name: "Project folder" });
+  await expect(folder).toBeFocused();
+  await folder.fill("apps/site");
+  await expect(page.getByText("Vite", { exact: true })).toBeVisible();
+  await expect(deploy).toBeEnabled();
+});
+
+test("selecting a release on a phone brings the details into view", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const history = page.getByRole("region", { name: "Deployment history" });
+  const failed = history.getByRole("button", { name: /Failed/ }).first();
+  await failed.click();
+  const detail = page.locator(".deployment-detail");
+  await expect(detail).toBeFocused();
+  await expect(detail.getByRole("heading")).toBeInViewport();
+  await expect(detail.getByText("The build failed.", { exact: false })).toBeVisible();
+  await detail.getByRole("button", { name: "Back to deployments" }).click();
+  await expect(failed).toBeFocused();
+});
+
 test("workspace desktop and mobile are accessible without overflow", async ({
   page,
 }) => {
-  await page.setViewportSize({ width: 1440, height: 1100 });
+  const preview = {
+    id: "dep-77af91c2",
+    project_id: "proj-docs-fixture",
+    project_slug: "docs-site",
+    git_url: "https://github.com/stratus-demo/docs-site",
+    status: "READY",
+    runtime_type: "static",
+    live_url: "http://dep-77af91c2.localhost:8000",
+    production_url: "http://docs-site.localhost:8000",
+    duration_ms: 8420,
+    created_at: Date.UTC(2026, 10, 28, 10, 48),
+  };
+  await page.route("**/api/deployments?limit=20", (route) => route.fulfill({ json: {
+    deployments: [
+      preview,
+      { ...preview, id: "dep-62bc124d", is_production: true, duration_ms: 9220, created_at: preview.created_at - 3600000 },
+      { ...preview, id: "dep-daf3287a", project_slug: "status-api", created_at: preview.created_at - 7200000,
+        git_url: "https://github.com/stratus-demo/status-api", runtime_type: "dynamic", status: "FAILED", duration_ms: 3110 },
+    ],
+  } }));
+  await page.route("**/api/deployments/dep-77af91c2/logs", (route) => route.fulfill({ json: {
+    logs: [
+      "[INFO] Preparing the repository",
+      "[INFO] Installing dependencies",
+      "[LOGS] > vite build",
+      "[LOGS] dist/index.html   1.24 kB",
+      "[INFO] Static build succeeded",
+      "[STATUS] READY",
+    ],
+  } }));
+  await page.reload();
+  await page.setViewportSize({ width: 1440, height: 1440 });
   await expect(page.getByRole("region", { name: "Build logs" })).toBeVisible();
+  const logs = page.getByRole("region", { name: "Build logs" });
+  await expect(logs.getByText("Saved output")).toBeVisible();
+  await expect(logs.locator(".xterm-rows")).toContainText("Static build succeeded");
   await page.screenshot({
     path: "test-results/workspace-desktop.png",
     fullPage: true,
   });
-  for (const width of [1440, 768, 390]) {
+  for (const width of [1440, 768, 320, 390]) {
     await page.setViewportSize({ width, height: 1000 });
     expect(
       await page.evaluate(

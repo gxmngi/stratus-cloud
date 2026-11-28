@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
-import { AlertTriangle } from "lucide-react";
+import { RotateCcw, Trash2 } from "lucide-react";
 
 export function ConfirmDialog({
   open,
@@ -50,8 +50,8 @@ export function ConfirmDialog({
         }
       }}
     >
-      <span className="dialog-symbol">
-        <AlertTriangle size={22} />
+      <span className="dialog-symbol" data-destructive={destructive} aria-hidden="true">
+        {destructive ? <Trash2 size={20} /> : <RotateCcw size={20} />}
       </span>
       <h2 id="confirm-title">{title}</h2>
       <p id="confirm-description">{description}</p>

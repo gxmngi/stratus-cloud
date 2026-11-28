@@ -2,10 +2,11 @@ import { Router, Request, Response, NextFunction } from 'express';
 import type Redis from 'ioredis';
 import { dbService, type DeploymentRecord } from './db';
 import { getDeploymentMetrics } from './telemetry';
-import { requestDeploymentDeletion } from './teardown';
+import { requestDeploymentDeletion, requestProjectDeletion } from './teardown';
 import { requireSession, requireTrustedOrigin } from './access';
 import { getOwnedProject, getOwnedDeployment, listOwnedProjects, listOwnedDeployments, getOrCreateOwnedProject } from './ownership';
 import { createDeploymentUrl } from './deployment-url';
+import { checkRepository, parseProjectDirectory, repositoryCheckLimit } from './repository-preflight';
 
 const ENV_KEY_PATTERN = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const MAX_ENV_VARS = 100;
@@ -50,7 +51,7 @@ export function createProjectRouter(options: {
     baseDomain?: string;
     newDeploymentId: () => string;
     buildsEnabled?: boolean;
-    syncProductionRoute: (slug: string, deployment: DeploymentRecord) => Promise<void>;
+    syncProductionRoute: (slug: string, deployment?: DeploymentRecord) => Promise<void>;
 }) {
     const router = Router();
     const { publisher: redisPublisher, dashboardOrigin, port: PORT,
@@ -102,6 +103,21 @@ export function createProjectRouter(options: {
     router.get('/projects', (req: Request, res: Response) => {
         const projects = listOwnedProjects(res.locals.user.id);
         res.json({ projects });
+    });
+
+    router.post('/deploy/preflight', repositoryCheckLimit, checkRepository);
+
+    router.delete('/projects/:id', async (req: Request, res: Response) => {
+        const projectId = req.params.id as string;
+        const result = requestProjectDeletion.immediate(projectId, res.locals.user.id);
+        if (result.status === 'QUEUED') {
+            if (result.slug) await syncProductionRoute(result.slug);
+            res.status(202).json({ projectId, status: 'DELETING' });
+        } else if (result.status === 'BUILDING') {
+            res.status(409).json({ error: 'Wait for the project’s builds to finish before deleting it.' });
+        } else {
+            res.status(404).json({ error: 'Project not found' });
+        }
     });
 
     router.delete('/deployments/:id', (req: Request, res: Response) => {
@@ -277,6 +293,8 @@ export function createProjectRouter(options: {
     // Deploy endpoint: รับ URL โค้ดแล้วส่งเข้าคิว พร้อมบันทึกลง SQLite
     router.post('/deploy', async (req: Request, res: Response) => {
         const { gitUrl, buildCommand, env } = req.body || {};
+        const rootDirectory = parseProjectDirectory(req.body?.rootDirectory);
+        const outputDir = parseProjectDirectory(req.body?.outputDirectory);
 
         if (typeof gitUrl !== 'string' || !gitUrl.trim() || gitUrl.length > 2048) {
             res.status(400).json({ error: 'Field "gitUrl" is required' });
@@ -292,6 +310,10 @@ export function createProjectRouter(options: {
 
         if (buildCommand !== undefined && (typeof buildCommand !== 'string' || buildCommand.length > 4096)) {
             res.status(400).json({ error: 'Invalid buildCommand' });
+            return;
+        }
+        if (rootDirectory === undefined || outputDir === undefined) {
+            res.status(400).json({ error: 'Project and output folders must be relative paths without parent directory segments.' });
             return;
         }
         const deploymentId = newDeploymentId();
@@ -321,6 +343,8 @@ export function createProjectRouter(options: {
                 projectId: project.id,
                 gitUrl,
                 buildCommand,
+                ...(rootDirectory ? { rootDirectory } : {}),
+                ...(outputDir ? { outputDir } : {}),
                 env: envResult.value,
             };
 

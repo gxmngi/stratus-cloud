@@ -1,59 +1,43 @@
 # Stratus interface
 
-The interface treats deployments as releases to inspect and manage. The main
-view pairs a selectable release history with deployment details, production
-actions and build logs. Summary counts describe the latest 20 deployments
-returned by the API, not a global account total.
+The workspace pairs a deployment history with the selected release, production
+actions, and build logs. The activity counts cover the latest 20 deployments
+returned by the API.
 
-## Direction
+## Visual design
 
-- Cloud white `#f7f9fc`, paper `#ffffff`, ink `#17243d`, cobalt `#345cda`,
-  slate `#586a85`, and dividers `#e3e8f0`.
-- Geist for interface text and Geist Mono for deployment identifiers and logs.
-- A persistent workspace sidebar and compact context header frame the content.
-  On small screens, the history and inspector stack and sign-out remains available.
-- Cobalt identifies primary actions. Green, amber and red communicate deployment
-  outcomes with accompanying text. Charts and uptime claims are never fabricated.
-- The authentication illustration depicts atmospheric layers, echoing the name
-  Stratus and its layered brand mark. It is local SVG, with no external assets.
+Rethink Sans is used for the interface. Geist Mono is used for identifiers and
+build commands. The workspace uses slate neutrals and a deep blue for primary
+actions. Status labels name the outcome as well as showing its color.
 
-An initial direction of dark console chrome was rejected because it did not
-connect the authentication and deployment experiences. The final light workspace
-keeps a dark terminal as the one deliberate contrast for reading build output.
+A photograph of Earth's horizon ties the deploy form and sign-in pages to the
+Stratus name. The workspace reserves most of its space for release history,
+actions, and logs. The sign-in and registration screens use a larger crop of the
+same photograph on desktop and a compact crop on mobile.
 
-## References
+[Photograph credit: NASA Johnson Space Center, ISS Expedition 23](https://science.nasa.gov/earth/earth-observatory/sunset-from-the-international-space-station-44267/)
 
-- [Linear's UI redesign](https://linear.app/now/how-we-redesigned-the-linear-ui):
-  navigation hierarchy, alignment and restrained chrome.
-- [Vercel's dashboard redesign](https://vercel.com/blog/dashboard-redesign):
-  prioritizing production and preview information.
-- [Railway's dashboard layout](https://railway.com/changelog/2026-03-20-new-dashboard-layout):
-  workspace navigation and information architecture.
+## Behavior
 
-These informed principles; their components, branding and artwork are not copied.
+- The repository check appears below the source field. When the root lacks a
+  package manifest, **Choose project folder** opens and focuses the folder field.
+- On phones, selecting a release reveals its details. **Back to deployments**
+  returns focus to the selected row.
+- Preview and production links are separate. Release actions and removal
+  controls are visually distinct. Destructive actions use a confirmation dialog
+  with Cancel focused first and Escape support.
+- The build log header indicates whether output is saved, live, unavailable, or
+  pending. Log connection status is kept outside the build output.
 
-## Behavior and verification
+## Verify the interface
 
-Search and filters operate on the current release list. Environment-variable
-values use masked inputs. Destructive operations use a native modal dialog with
-cancel-first focus, keyboard containment, Escape dismissal and focus restoration.
-Deployment API calls and session handling retain the existing backend contract.
-Opening a log connection no longer implies that a completed build is BUILDING.
-The terminal resizes to the inspector width with a cleaned-up ResizeObserver.
+Run `npm run lint`, `npm run build`, and `npm run test:e2e` from `apps/web`.
+Browser tests use an isolated database and write screenshots to `test-results/`.
+They cover auth, repository checks, responsive layouts, keyboard interaction,
+confirmation dialogs, and automated accessibility checks.
 
-Run `npm run lint`, `npx tsc --noEmit`, `npm run build`, and `npm run test:e2e`
-from `apps/web`. Browser tests use a separate temporary API database. They cover
-authentication, keyboard interactions, search/filter behavior, masked variables,
-confirmation dialogs, automated accessibility checks and horizontal overflow
-at desktop, tablet and mobile sizes. Screenshots are saved in `test-results/`.
-The browser-test API runs offline; a real Docker deployment is a separate check.
-
-With the full stack running (`npm run dev`), run `npm run test:workspace` from
-the repository root. This uses Chromium and the demo Alice account to submit two
-real Node.js builds through the form, receive WebSocket logs, promote the second
-runtime, roll back to the first, and delete the superseded preview. It checks
-the deployment ID returned by the actual production HTTP endpoint after each
-switch, rather than relying only on button responses. A uniquely named project
-and its initial production runtime remain available for inspection. Reports and
-screenshots are saved under the ignored `services/data/ui-flow/` directory.
-The check does not modify production pointers of existing projects.
+For a real release check, start the local stack with `npm run dev`, then run
+`npm run test:workspace` from the root. It builds two Node.js releases,
+promotes the second, rolls back, and removes the superseded preview. It leaves
+the test project's initial production runtime available for inspection. See
+[local deployment](local-deployment.md) for setup.

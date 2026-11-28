@@ -52,6 +52,7 @@ interface RuntimeOptions {
     hostCodeDir: string;
     port: number;
     network?: string;
+    workingDirectory?: string;
 }
 
 export async function createRuntimeContainer(docker: Docker, options: RuntimeOptions) {
@@ -67,7 +68,7 @@ export async function createRuntimeContainer(docker: Docker, options: RuntimeOpt
         Labels: { 'stratus.deployment': deploymentId, 'stratus.role': 'runtime' },
         Image: image,
         Cmd: ['sh', '-c', startCommand],
-        WorkingDir: '/app',
+        WorkingDir: options.workingDirectory ?? '/app',
         Env: [...formattedEnv, `PORT=${RUNTIME_PORT}`, 'NODE_ENV=production', `STRATUS_DEPLOYMENT_ID=${deploymentId}`],
         ExposedPorts: { [portKey]: {} },
         HostConfig: {

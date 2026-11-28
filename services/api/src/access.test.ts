@@ -113,7 +113,7 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         ['GET', '/api/deployments/owned-dep'], ['GET', '/api/deployments/owned-dep/logs'],
         ['GET', '/api/deployments/owned-dep/stats'], ['POST', '/api/deployments/owned-dep/promote'],
         ['POST', '/api/deployments/owned-dep/rollback'], ['POST', `/api/projects/${projectId}/rollback`],
-        ['DELETE', '/api/deployments/owned-dep'], ['POST', '/api/deploy'],
+        ['DELETE', '/api/deployments/owned-dep'], ['DELETE', `/api/projects/${projectId}`], ['POST', '/api/deploy'],
     ];
 
     test('health remains public while business endpoints require login', async () => {
@@ -121,6 +121,23 @@ test.describe('Owner authorization over HTTP and WebSocket', () => {
         for (const [method, route] of resources()) {
             assert.equal((await request(route, undefined, method, method === 'POST' ? {} : undefined)).status, 401, route);
         }
+    });
+
+    test('an owner can delete a project with a live production deployment', async () => {
+        const project = dbService.getOrCreateProject('fixtures/delete-project');
+        claimUnownedProjects('alice', [project.id]);
+        dbService.createDeployment({ id: 'dep-project-delete', project_id: project.id, git_url: project.git_url,
+            status: 'READY', live_url: 'about:blank', created_at: 1 });
+        dbService.setProjectProductionDeployment(project.id, 'dep-project-delete');
+        const route = `/api/projects/${project.id}`;
+        assert.equal((await request(route, alice, 'DELETE', undefined, 'https://other.example.test')).status, 403);
+        const before = calls.length;
+        const response = await request(route, alice, 'DELETE');
+        assert.equal(response.status, 202);
+        assert.deepEqual(await response.json(), { projectId: project.id, status: 'DELETING' });
+        assert.deepEqual(calls.splice(before), ['route']);
+        assert.equal((await request(route, alice, 'DELETE')).status, 404);
+        assert.equal((await request('/api/deployments/dep-project-delete', alice)).status, 404);
     });
 
     test('another user sees empty lists and cannot read or mutate owner resources', async () => {

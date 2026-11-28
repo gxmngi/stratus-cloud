@@ -9,6 +9,7 @@ type BuildSettings = {
     hasBuildEnvironment: boolean;
     npmCacheEnabled: boolean;
     pnpmCacheEnabled: boolean;
+    repositoryDirectory?: string;
 };
 
 function hasBuildScript(manifestPath: string): boolean {
@@ -24,12 +25,16 @@ function hasBuildScript(manifestPath: string): boolean {
 export function resolveBuildPlan(codeDir: string, settings: BuildSettings): BuildPlan {
     if (settings.customCommand) return { command: settings.customCommand };
 
-    const has = (file: string) => fs.existsSync(path.join(codeDir, file));
+    const lockfiles = ['pnpm-lock.yaml', 'yarn.lock', 'bun.lockb', 'bun.lock', 'package-lock.json', 'npm-shrinkwrap.json'];
+    const hasAt = (directory: string, file: string) => fs.existsSync(path.join(directory, file));
+    const repositoryDirectory = settings.repositoryDirectory ?? codeDir;
+    const packageDirectory = lockfiles.some(file => hasAt(codeDir, file)) ? codeDir : repositoryDirectory;
+    const has = (file: string) => hasAt(packageDirectory, file);
     const build = hasBuildScript(path.join(codeDir, 'package.json'));
     const { projectId } = settings;
     const canCache = typeof projectId === 'string' &&
         /^proj-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(projectId) &&
-        !settings.hasBuildEnvironment && !has('.npmrc');
+        !settings.hasBuildEnvironment && !hasAt(codeDir, '.npmrc') && !hasAt(repositoryDirectory, '.npmrc');
 
     if (has('pnpm-lock.yaml')) {
         const cache: CacheMount | undefined = canCache && settings.pnpmCacheEnabled &&
